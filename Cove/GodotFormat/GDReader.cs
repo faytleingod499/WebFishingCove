@@ -24,6 +24,11 @@ namespace Cove.GodotFormat
         private BinaryReader reader;
         public Serilog.Core.Logger logger;
 
+        // Packets are attacker controlled. Deeply nested containers would overflow the stack, and a stack
+        // overflow cannot be caught in .NET, so it kills the whole server. Legit packets nest ~4 levels.
+        private const int MaxDepth = 32;
+        private int depth = 0;
+
         public GodotReader(byte[] data, Serilog.Core.Logger serverLogger)
         {
             this.data = data;
@@ -31,19 +36,21 @@ namespace Cove.GodotFormat
             logger = serverLogger;
         }
 
+        private long remainingBytes => reader.BaseStream.Length - reader.BaseStream.Position;
+
         public Dictionary<string, object> readPacket()
         {
-            int type = reader.ReadInt32();
-
-            if (type != (int)GodotTypes.dictionaryValue)
-            {
-                //throw new Exception("Unable to decode a non-dictionary godot packet!");
-            }
-
             Dictionary<string, object> dic = new Dictionary<string, object>();
 
             try
             {
+                int type = reader.ReadInt32();
+
+                if (type != (int)GodotTypes.dictionaryValue)
+                {
+                    //throw new Exception("Unable to decode a non-dictionary godot packet!");
+                }
+
                 dic = readDictionary();
             }
             catch (Exception e)
@@ -56,6 +63,21 @@ namespace Cove.GodotFormat
         }
 
         private Object readNext()
+        {
+            if (++depth > MaxDepth)
+                throw new InvalidDataException("Packet nesting is too deep.");
+
+            try
+            {
+                return readNextInner();
+            }
+            finally
+            {
+                depth--;
+            }
+        }
+
+        private Object readNextInner()
         {
             int v = reader.ReadInt32();
 
@@ -176,6 +198,11 @@ namespace Cove.GodotFormat
         private string readString()
         {
             int stringLength = reader.ReadInt32();
+
+            // a bogus length would otherwise allocate up to ~2GB, or throw on a negative value
+            if (stringLength < 0 || stringLength > remainingBytes)
+                throw new InvalidDataException($"Invalid string length {stringLength}.");
+
             char[] stringValue = reader.ReadChars(stringLength);
 
             // this feild is padded to 4 bytes
@@ -193,6 +220,10 @@ namespace Cove.GodotFormat
 
             int elementCount = reader.ReadInt32() & 0x7FFFFFFF;
 
+            // every element takes at least 4 bytes, so a count beyond that is malformed
+            if (elementCount > remainingBytes / 4)
+                throw new InvalidDataException($"Invalid array length {elementCount}.");
+
             for (int i = 0; i < elementCount; i++)
             {
                 object ins = readNext(); // read the next thing
@@ -208,6 +239,10 @@ namespace Cove.GodotFormat
             Dictionary<string, object> dic = new Dictionary<string, object>();
 
             int elementCount = reader.ReadInt32() & 0x7FFFFFFF;
+
+            // a key and a value take at least 8 bytes per entry
+            if (elementCount > remainingBytes / 8)
+                throw new InvalidDataException($"Invalid dictionary length {elementCount}.");
 
             for (int i = 0; i < elementCount; i++)
             {

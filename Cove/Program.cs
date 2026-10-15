@@ -32,6 +32,47 @@ var serverLogger = new LoggerConfiguration()
 
 CoveServer webfishingServer = new CoveServer();
 webfishingServer.logger = serverLogger;
+
+void Log(string message)
+{
+    serverLogger.Information(message);
+}
+
+// Everything that can end the process is hooked up BEFORE the server starts. These used to be registered after
+// Init(), so a crash during startup was never logged and never shut Steam down cleanly.
+AppDomain.CurrentDomain.UnhandledException += (sender, args) =>
+{
+    serverLogger.Fatal("Unhandled exception occured");
+    serverLogger.Fatal(args.ExceptionObject.ToString());
+    webfishingServer.Stop();
+};
+
+// exceptions from fire-and-forget tasks are not fatal, but they should never vanish silently
+TaskScheduler.UnobservedTaskException += (sender, args) =>
+{
+    serverLogger.Error("Unobserved task exception");
+    serverLogger.Error(args.Exception.ToString());
+    args.SetObserved();
+};
+
+Console.CancelKeyPress += Console_CancelKeyPress;
+void Console_CancelKeyPress(object? sender, ConsoleCancelEventArgs e)
+{
+    e.Cancel = true; // we exit ourselves once the shutdown has finished
+    Log("Server closed from input");
+    webfishingServer.Stop();
+}
+
+// `docker stop` / `systemctl stop` send SIGTERM, which previously killed the server without telling the lobby or Steam
+using var sigTerm = System.Runtime.InteropServices.PosixSignalRegistration.Create(
+    System.Runtime.InteropServices.PosixSignal.SIGTERM,
+    context =>
+    {
+        context.Cancel = true;
+        Log("Server received SIGTERM");
+        webfishingServer.Stop();
+    });
+
 try
 {
     serverLogger.Information("Starting server...");
@@ -43,22 +84,11 @@ try
     webfishingServer.Stop();
 }
 
-AppDomain.CurrentDomain.UnhandledException += (sender, args) =>
+// Init() returns without starting anything when setup failed (Steam not running, missing world file ...).
+// There is nothing to keep alive in that case, so exit instead of idling forever as a dead server.
+if (webfishingServer.serverPlayer == null)
 {
-    serverLogger.Fatal("Unhandled exception occured");
-    serverLogger.Fatal(args.ExceptionObject.ToString());
-    webfishingServer.Stop();
-};
-
-void Log(string message)
-{
-    serverLogger.Information(message);
-}
-
-Console.CancelKeyPress += Console_CancelKeyPress;
-void Console_CancelKeyPress(object? sender, ConsoleCancelEventArgs e)
-{
-    Log("Server closed from input");
+    serverLogger.Fatal("The server failed to start, see the messages above.");
     webfishingServer.Stop();
 }
 
@@ -66,18 +96,34 @@ while (true)
 {
     var input = Console.ReadLine();
 
-    // prevent null inputs
+    // ReadLine returns null when stdin is closed or not attached (docker without -i, systemd, nohup). The old
+    // `continue` turned that into a loop burning an entire CPU core. The server doesn't need console input to run,
+    // so just park this thread, the network/callback threads do all the work.
     if (input == null)
+    {
+        Thread.Sleep(Timeout.Infinite);
+        continue;
+    }
+
+    if (string.IsNullOrWhiteSpace(input))
         continue;
 
     string command = input.Split(' ')[0];
 
-    if (webfishingServer.DoseCommandExist(command))
+    try
     {
-        string[] commandArgs = input.Split(' ').Skip(1).ToArray();
-        webfishingServer.InvokeCommand(webfishingServer.serverPlayer, command, commandArgs);
+        if (webfishingServer.DoseCommandExist(command))
+        {
+            string[] commandArgs = input.Split(' ').Skip(1).ToArray();
+            webfishingServer.InvokeCommand(webfishingServer.serverPlayer, command, commandArgs);
+        }
+        else
+            Log("Command not found!");
     }
-    else
-        Log("Command not found!");
-
+    catch (Exception e)
+    {
+        // a typo in a console command must not take the server down
+        serverLogger.Error($"Command \"{command}\" failed:");
+        serverLogger.Error(e.ToString());
+    }
 }

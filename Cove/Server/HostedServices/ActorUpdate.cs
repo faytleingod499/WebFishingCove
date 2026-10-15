@@ -55,61 +55,84 @@ namespace Cove.Server.HostedServices
         Dictionary<long, Vector3> pastTransforms = new Dictionary<long, Vector3>();
         int updateI = 0;
 
+        // System.Threading.Timer fires again on another thread even if the previous callback is still running.
+        // At 12Hz a slow tick (many actors, a busy lock) would otherwise pile up overlapping ticks that race on
+        // updateI / pastTransforms and send duplicate updates.
+        private int running = 0;
+
         // This is the method that will be triggered periodically by the timer.
         private void DoWork(object state)
         {
-            updateI++;
-
+            if (Interlocked.Exchange(ref running, 1) != 0)
+                return; // the previous tick hasn't finished, skip this one
 
             try
             {
+                updateI++;
 
-                foreach (PluginInstance plugin in server.loadedPlugins)
+                // a plugin that throws in onUpdate must not stop the actors (rain clouds etc) from being updated
+                foreach (PluginInstance plugin in server.loadedPlugins.ToList())
                 {
-                    plugin.plugin.onUpdate();
+                    server.SafePluginCall(plugin, () => plugin.plugin.onUpdate());
                 }
 
                 lock (server.serverActorListLock)
                 {
                     foreach (WFActor actor in server.serverOwnedInstances.ToList())
                     {
-                        actor.onUpdate();
-
-                        if (!pastTransforms.ContainsKey(actor.InstanceID))
+                        try
                         {
-                            pastTransforms[actor.InstanceID] = Vector3.zero;
-                        }
+                            actor.onUpdate();
 
-                        if (actor.pos != pastTransforms[actor.InstanceID] || (updateI == idelUpdateCount))
+                            if (!pastTransforms.ContainsKey(actor.InstanceID))
+                            {
+                                pastTransforms[actor.InstanceID] = Vector3.zero;
+                            }
+
+                            if (actor.pos != pastTransforms[actor.InstanceID] || (updateI == idelUpdateCount))
+                            {
+
+                                Dictionary<string, object> packet = new Dictionary<string, object>();
+                                packet["type"] = "actor_update";
+                                packet["actor_id"] = actor.InstanceID;
+                                packet["pos"] = actor.pos;
+                                packet["rot"] = actor.rot;
+
+                                pastTransforms[actor.InstanceID] = actor.pos; // crude
+
+                                server.sendPacketToPlayers(packet);
+                            }
+                        }
+                        catch (Exception e)
                         {
-
-                            Dictionary<string, object> packet = new Dictionary<string, object>();
-                            packet["type"] = "actor_update";
-                            packet["actor_id"] = actor.InstanceID;
-                            packet["pos"] = actor.pos;
-                            packet["rot"] = actor.rot;
-
-                            pastTransforms[actor.InstanceID] = actor.pos; // crude
-
-                            server.sendPacketToPlayers(packet);
+                            // one broken actor shouldn't stop the others from being updated this tick
+                            _logger.LogError(e.ToString());
                         }
+                    }
+
+                    // pastTransforms got an entry for every actor ever spawned and never lost one, drop the
+                    // entries of actors that no longer exist (done on the idle cycle, it doesn't need to be frequent)
+                    if (updateI >= idelUpdateCount && pastTransforms.Count > server.serverOwnedInstances.Count)
+                    {
+                        var liveIds = new HashSet<long>(server.serverOwnedInstances.Select(a => a.InstanceID));
+                        foreach (long staleId in pastTransforms.Keys.Where(id => !liveIds.Contains(id)).ToList())
+                            pastTransforms.Remove(staleId);
                     }
                 }
             }
             catch (Exception e)
             {
                 _logger.LogError(e.ToString());
-                //Log(e);
-                // just means the list was modified while iterating
-                // most likly a actor was added or removed because of a spawn or despawn
-                // nothing to worry about
             }
-
-            if (updateI >= idelUpdateCount)
+            finally
             {
-                updateI = 0;
-            }
+                if (updateI >= idelUpdateCount)
+                {
+                    updateI = 0;
+                }
 
+                Volatile.Write(ref running, 0);
+            }
         }
 
         // This method is called when the service is stopping.

@@ -63,37 +63,47 @@ namespace Cove.Server
         {
             byte[] packetBytes = writePacket(packet);
 
-            // get the wfPlayer object
-            var player = AllPlayers.Find(p => p.SteamId.m_SteamID == id.m_SteamID);
-            if (player == null)
-                return;
-
-            if (player.identity.GetSteamID64() == 0)
+            lock (stateLock)
             {
-                return;
+                // get the wfPlayer object
+                var player = AllPlayers.Find(p => p.SteamId.m_SteamID == id.m_SteamID);
+                if (player == null)
+                    return;
+
+                if (player.identity.GetSteamID64() == 0)
+                {
+                    return;
+                }
+
+                int channel = packet.TryGetValue("channel", out object? value) && value is int c
+                    ? c
+                    : (int)Server.CHANNELS.GAME_STATE;
+
+                GCHandle handle = GCHandle.Alloc(packetBytes, GCHandleType.Pinned);
+                try
+                {
+                    IntPtr dataPointer = handle.AddrOfPinnedObject();
+
+                    SteamNetworkingMessages.SendMessageToUser(
+                        ref player.identity,
+                        dataPointer,
+                        (uint)packetBytes.Length,
+                        8,
+                        channel
+                    );
+                }
+                finally
+                {
+                    handle.Free(); // always free the handle, a leaked pin can never be moved by the GC
+                }
             }
-
-            GCHandle handle = GCHandle.Alloc(packetBytes, GCHandleType.Pinned);
-            IntPtr dataPointer = handle.AddrOfPinnedObject();
-
-            int channel = packet.TryGetValue("channel", out object? value)
-                ? (int)value
-                : (int)Server.CHANNELS.GAME_STATE;
-
-            SteamNetworkingMessages.SendMessageToUser(
-                ref player.identity,
-                dataPointer,
-                (uint)packetBytes.Length,
-                8,
-                channel
-            );
-
-            handle.Free(); // free the handle
         }
 
         public CSteamID[] getAllPlayers()
         {
-            WFPlayer[] AllPlayersNow = AllPlayers.ToArray();
+            WFPlayer[] AllPlayersNow;
+            lock (stateLock)
+                AllPlayersNow = AllPlayers.ToArray();
 
             int playerCount = AllPlayersNow.Length;
             CSteamID[] players = new CSteamID[playerCount];
@@ -142,6 +152,11 @@ namespace Cove.Server
                 byte[] data = new byte[message.m_cbSize];
                 Marshal.Copy(message.m_pData, data, 0, message.m_cbSize);
 
+                // The message buffer is owned by Steam and has to be released exactly once. Previously an exception
+                // between here and the Release call at the bottom (e.g. while building the wrapper object) would leak it.
+                // The data was already copied above, so it is safe to release right away.
+                SteamNetworkingMessage_t.Release(messagePointers[i]);
+
                 /*
                 Dictionary<string, object> msgDict = new Dictionary<string, object>
                 {
@@ -173,7 +188,6 @@ namespace Cove.Server
                 };
 
                 messages.Add(msgDict);
-                SteamNetworkingMessage_t.Release(messagePointers[i]);
             }
 
             return messages;

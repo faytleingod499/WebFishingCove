@@ -33,6 +33,10 @@ namespace Cove.Server.Chalk
         /// </summary>
         /// <param name="transformations">A dictionary containing the transformations, where each key is an index and each value is a dictionary containing a position (Vector2) and a color (long).</param>
         /// <remarks>Only canvases with IDs {0, 1, 2, 3} are allowed to be updated.</remarks>
+        // Upper bound on distinct cells kept per canvas. Vanilla canvases are much smaller, this only exists so a
+        // client sending endless unique coordinates can't grow the dictionary until the server runs out of memory.
+        private const int MaxCells = 250_000;
+
         private void updateCanvasImage(Dictionary<int, object> transformations)
         {
             int[] allowedCanvas = { 0, 1, 2, 3 };
@@ -42,12 +46,34 @@ namespace Cove.Server.Chalk
                 return;
             }
 
-            foreach (var idx in transformations.Keys)
+            // The data comes straight from a client packet, so every cast has to be checked. A malformed cell is
+            // skipped instead of throwing, which used to abort the whole packet and any plugin hooks after it.
+            // chalkImage is also read by the thread that syncs chalk to joining players, hence the lock.
+            lock (chalkImage)
             {
-                var transformation = (Dictionary<int, object>)transformations[idx];
-                var coords = (Vector2)transformation[0];
-                var color = (long)transformation[1];
-                chalkImage[coords] = color;
+                foreach (var transformation in transformations.Values)
+                {
+                    if (transformation is not Dictionary<int, object> cell
+                        || !cell.TryGetValue(0, out object? rawCoords) || rawCoords is not Vector2 coords
+                        || !cell.TryGetValue(1, out object? rawColor) || !TryReadColor(rawColor, out long color))
+                        continue;
+
+                    if (chalkImage.Count >= MaxCells && !chalkImage.ContainsKey(coords))
+                        continue;
+
+                    chalkImage[coords] = color;
+                }
+            }
+        }
+
+        private static bool TryReadColor(object? raw, out long color)
+        {
+            switch (raw)
+            {
+                case long l: color = l; return true;
+                case int i: color = i; return true;
+                case COLOR c: color = (long)c; return true;
+                default: color = 0; return false;
             }
         }
 
@@ -59,14 +85,17 @@ namespace Cove.Server.Chalk
         public Dictionary<int, object> getChalkPacket()
         {
             Dictionary<int, object> cells = new Dictionary<int, object>();
-            ulong i = 0;
-            foreach (KeyValuePair<Vector2, long> entry in chalkImage.ToList())
+            int i = 0;
+            lock (chalkImage)
             {
-                Dictionary<int, object> arr = new();
-                arr[0] = entry.Key;
-                arr[1] = entry.Value;
-                cells[(int)i] = arr;
-                i++;
+                foreach (KeyValuePair<Vector2, long> entry in chalkImage)
+                {
+                    Dictionary<int, object> arr = new();
+                    arr[0] = entry.Key;
+                    arr[1] = entry.Value;
+                    cells[i] = arr;
+                    i++;
+                }
             }
             return cells;
         }
@@ -87,6 +116,7 @@ namespace Cove.Server.Chalk
         /// <param name="chalkData"></param>
         public void chalkUpdate(Dictionary<Vector2, long> chalkData)
         {
+            // note: this broadcasts the whole canvas once per cell, which is expensive for large pastes (unchanged behaviour)
             foreach (var transformation in chalkData.ToList())
             {
                 var position = transformation.Key;
@@ -131,7 +161,7 @@ namespace Cove.Server.Chalk
             for (int i = 0; i < transformations.Count; i++)
             {
                 var cell = (Dictionary<int, object>)transformations[i];
-                cell[1] = COLOR.NONE;
+                cell[1] = (long)COLOR.NONE; // must stay a long, the packet writer and readers expect one
             }
             drawChalk(transformations);
             if (emitChanges)
@@ -147,18 +177,20 @@ namespace Cove.Server.Chalk
         public void drawChalk(Dictionary<int, object> transformations)
         {
             updateCanvasImage(transformations);
-            var cells = new List<Dictionary<int, object>>();
-            foreach (var idx in transformations.Keys)
-            {
-                var transformation = (Dictionary<int, object>)transformations[idx];
-                var coords = (Vector2)transformation[0];
-                var color = (long)transformation[0];
-                cells.Append(new Dictionary<int, object> { { 0, coords }, { 1, color } });
-            }
+
+            // Rebuild the packet body. This used to call cells.Append(...) and throw the result away (Append returns
+            // a new sequence, it doesn't modify the list) and read the colour from index 0 instead of 1, so the
+            // broadcast was always empty and drawChalk never actually showed anything to players.
             var chalkData = new Dictionary<int, object>();
-            for (int i = 0; i < cells.Count; i++)
+            int n = 0;
+            foreach (var transformation in transformations.Values)
             {
-                chalkData[i] = cells[i];
+                if (transformation is not Dictionary<int, object> cell
+                    || !cell.TryGetValue(0, out object? rawCoords) || rawCoords is not Vector2 coords
+                    || !cell.TryGetValue(1, out object? rawColor) || !TryReadColor(rawColor, out long color))
+                    continue;
+
+                chalkData[n++] = new Dictionary<int, object> { { 0, coords }, { 1, color } };
             }
             server.sendPacketToPlayers(
                 new Dictionary<string, object>

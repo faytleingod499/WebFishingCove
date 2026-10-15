@@ -51,31 +51,57 @@ namespace Cove.Server
 
             foreach (Assembly assembly in pluginAssemblys)
             {
-                // Get all types in the assembly
-                Type[] types = assembly.GetTypes();
-
-                // Iterate over each type and check if it inherits from CovePlugin
-                foreach (Type type in types)
+                // Plugins are third party code, and one of them being broken (wrong dependency version, missing
+                // config keys, a throwing constructor or onInit) must not stop the server from starting.
+                try
                 {
-                    if (type.IsClass && type.IsSubclassOf(typeof(CovePlugin)))
+                    // Get all types in the assembly
+                    Type[] types;
+                    try
                     {
-                        object instance = Activator.CreateInstance(type, this);
-                        CovePlugin plugin = instance as CovePlugin;
-                        if (plugin != null)
+                        types = assembly.GetTypes();
+                    }
+                    catch (ReflectionTypeLoadException e)
+                    {
+                        // some types failed to load (usually a missing dependency), still use the ones that did
+                        Log($"Some types in {assembly.GetName().Name} could not be loaded: {e.LoaderExceptions.FirstOrDefault()?.Message}");
+                        types = e.Types.Where(t => t != null).ToArray()!;
+                    }
+
+                    // Iterate over each type and check if it inherits from CovePlugin
+                    foreach (Type type in types)
+                    {
+                        if (type.IsClass && type.IsSubclassOf(typeof(CovePlugin)))
                         {
                             string pluginConfig = readConfigFromPlugin($"{assembly.GetName().Name}.plugin.cfg", assembly);
                             if (pluginConfig == string.Empty) continue; // no config file found, its probably not a plugin
                             Dictionary<string, string> config = ConfigReader.ReadFile(pluginConfig);
 
-                            PluginInstance thisInstance = new(plugin, config["name"], config["id"], config["author"]);
+                            if (!config.ContainsKey("name") || !config.ContainsKey("id") || !config.ContainsKey("author"))
+                            {
+                                Log($"The plugin.cfg of {assembly.GetName().Name} must contain name, id and author, skipping it.");
+                                continue;
+                            }
 
-                            loadedPlugins.Add(thisInstance);
-                            Log($"Plugin Init: {config["name"]}");
-                            plugin.onInit(); // start the plugin!
+                            object instance = Activator.CreateInstance(type, this);
+                            CovePlugin plugin = instance as CovePlugin;
+                            if (plugin != null)
+                            {
+                                PluginInstance thisInstance = new(plugin, config["name"], config["id"], config["author"]);
+
+                                loadedPlugins.Add(thisInstance);
+                                Log($"Plugin Init: {config["name"]}");
+                                plugin.onInit(); // start the plugin!
+                            }
+                            else
+                                Log($"Unable to load {type.FullName}");
                         }
-                        else
-                            Log($"Unable to load {type.FullName}");
                     }
+                }
+                catch (Exception e)
+                {
+                    Log($"Failed to load plugin assembly {assembly.GetName().Name}, it was skipped:");
+                    Log(e.ToString());
                 }
             }
         }

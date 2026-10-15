@@ -75,8 +75,14 @@ namespace Cove.Server.Utils
                     continue;
                 }
 
-                string[] parts = line.Split("=");
-                configValues[parts[0].Trim()] = parts[1].Trim();
+                // split on the FIRST '=' only. Splitting on every one and taking parts[1] cut values like
+                // "serverName = a=b" short, and a line with no '=' at all threw IndexOutOfRange which stopped the
+                // server from starting over a typo in server.cfg
+                int separator = line.IndexOf('=');
+                if (separator <= 0)
+                    continue; // not a "key = value" line, ignore it
+
+                configValues[line.Substring(0, separator).Trim()] = line.Substring(separator + 1).Trim();
 
             }
 

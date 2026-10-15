@@ -45,9 +45,10 @@ namespace Cove.Server
             sendPacketToPlayers(leftPacket);
 
 
-            foreach (PluginInstance plugin in loadedPlugins)
+            // a plugin that throws here must not stop the ban itself from being applied below
+            foreach (PluginInstance plugin in loadedPlugins.ToList())
             {
-                plugin.plugin.onPlayerBanned(player, banReason);
+                SafePluginCall(plugin, () => plugin.plugin.onPlayerBanned(player, banReason));
             }
 
             if (saveToFile)
@@ -66,30 +67,71 @@ namespace Cove.Server
             unwriteFromBansFile(id);
         }
 
-        public bool isPlayerBanned(CSteamID id)
+        // In-memory copy of bans.txt. This check runs for every single incoming packet (dozens per second per
+        // player), and it used to read and scan the whole file from disk each time, under a global lock.
+        private readonly HashSet<ulong> bannedIds = new();
+        private DateTime bansLoadedWriteTime = DateTime.MinValue;
+        private long bansLastCheckTicks = 0;
+        private static readonly TimeSpan BanRecheckInterval = TimeSpan.FromSeconds(2);
+
+        private void reloadBansIfChanged()
         {
+            // only look at the file at most every couple of seconds, so manual edits to bans.txt are still picked up
+            long now = Environment.TickCount64;
+            if (bansLastCheckTicks != 0 && now - bansLastCheckTicks < BanRecheckInterval.TotalMilliseconds)
+                return;
+            bansLastCheckTicks = now;
+
             string fileDir = $"{AppDomain.CurrentDomain.BaseDirectory}bans.txt";
 
+            // check if the file exists
+            if (!File.Exists(fileDir))
+            {
+                File.Create(fileDir).Close();
+                bannedIds.Clear();
+                bansLoadedWriteTime = File.GetLastWriteTimeUtc(fileDir);
+                return; // no one is banned yet
+            }
+
+            DateTime writeTime = File.GetLastWriteTimeUtc(fileDir);
+            if (writeTime == bansLoadedWriteTime)
+                return; // unchanged since the last load
+
+            try
+            {
+                var loaded = new HashSet<ulong>();
+                foreach (string rawLine in File.ReadAllLines(fileDir))
+                {
+                    // lines look like "<steamid> # <name> - <reason>", only the leading id counts. Matching the whole
+                    // line used to ban people whose id happened to appear inside someone else's name or reason.
+                    string line = rawLine.Trim();
+                    int comment = line.IndexOf('#');
+                    string idPart = (comment >= 0 ? line.Substring(0, comment) : line).Trim();
+
+                    if (ulong.TryParse(idPart, out ulong banned))
+                        loaded.Add(banned);
+                }
+
+                bannedIds.Clear();
+                foreach (ulong banned in loaded)
+                    bannedIds.Add(banned);
+
+                bansLoadedWriteTime = writeTime;
+            }
+            catch (IOException e)
+            {
+                // the file is busy (being written), keep the previous list and try again on the next check
+                logger.Warning($"Could not read bans.txt: {e.Message}");
+            }
+        }
+
+        public bool isPlayerBanned(CSteamID id)
+        {
             lock (BanLock)
             {
-                // check if the file exists
-                if (!File.Exists(fileDir))
-                {
-                    File.Create(fileDir).Close();
-                    return false; // no one is banned yet
-                }
-
-                string[] fileContent = File.ReadAllLines(fileDir);
-
-                foreach (string line in fileContent)
-                {
-                    if (line.Contains(id.m_SteamID.ToString()))
-                    {
-                        return true;
-                    }
-                }
+                reloadBansIfChanged();
+                return bannedIds.Contains(id.m_SteamID);
             }
-            return false;
         }
 
         private void writeToBansFile(CSteamID id, string reason)
@@ -108,6 +150,10 @@ namespace Cove.Server
                         $"{AppDomain.CurrentDomain.BaseDirectory}bans.txt",
                         [entry]
                     );
+
+                    // apply right away, don't wait for the next file check
+                    bannedIds.Add(id.m_SteamID);
+                    bansLoadedWriteTime = File.GetLastWriteTimeUtc($"{AppDomain.CurrentDomain.BaseDirectory}bans.txt");
                 }
                 catch (IOException e)
                 {
@@ -126,10 +172,15 @@ namespace Cove.Server
                     var fileContent = File.ReadAllLines(
                         $"{AppDomain.CurrentDomain.BaseDirectory}bans.txt"
                     );
+                    string idString = id.m_SteamID.ToString();
                     File.WriteAllLines(
                         $"{AppDomain.CurrentDomain.BaseDirectory}bans.txt",
-                        fileContent.Where(line => !line.Contains(id.m_SteamID.ToString())).ToArray()
+                        fileContent.Where(line => line.Split('#')[0].Trim() != idString).ToArray()
                     );
+
+                    bannedIds.Remove(id.m_SteamID);
+                    bannedNotified.TryRemove(id.m_SteamID, out _); // allow a future re-ban to be announced again
+                    bansLoadedWriteTime = File.GetLastWriteTimeUtc($"{AppDomain.CurrentDomain.BaseDirectory}bans.txt");
                 }
                 catch (IOException e)
                 {

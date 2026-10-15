@@ -52,19 +52,54 @@ namespace Cove.Server.HostedServices
 
         private float rainChance = 0f;
 
+        private int running = 0;
+
+        // Lobby owner has to be wrong on several checks in a row before we shut down. A single read taken while Steam
+        // is briefly reconnecting used to be enough to take the whole server down.
+        private int ownerMismatches = 0;
+        private const int OwnerMismatchesBeforeStop = 3;
+
         // This is the method that will be triggered periodically by the timer.
         private void DoWork(object state)
+        {
+            if (Interlocked.Exchange(ref running, 1) != 0)
+                return; // previous tick still running
+
+            try
+            {
+                DoWorkInner();
+            }
+            catch (Exception e)
+            {
+                _logger.LogError(e.ToString());
+            }
+            finally
+            {
+                Volatile.Write(ref running, 0);
+            }
+        }
+
+        private void DoWorkInner()
         {
             // check that the host of the lobby is still the server
             if (SteamMatchmaking.GetLobbyOwner(server.SteamLobby).m_SteamID != server.serverPlayer.SteamId.m_SteamID)
             {
-                // somthing has gone wrong, the server is no longer the host of the lobby
-                server.logger.Fatal("The server is no longer the host of the lobby, shutting down.");
-                server.logger.Fatal("Make sure you have a good connection to steam, this happends when the server disconnects from steam");
-                server.logger.Fatal("If your internet is unstable, this will happen often!");
+                ownerMismatches++;
+                if (ownerMismatches >= OwnerMismatchesBeforeStop)
+                {
+                    // somthing has gone wrong, the server is no longer the host of the lobby
+                    server.logger.Fatal("The server is no longer the host of the lobby, shutting down.");
+                    server.logger.Fatal("Make sure you have a good connection to steam, this happends when the server disconnects from steam");
+                    server.logger.Fatal("If your internet is unstable, this will happen often!");
 
-                // stop the server
-                server.Stop();
+                    // stop the server
+                    server.Stop();
+                    return;
+                }
+            }
+            else
+            {
+                ownerMismatches = 0;
             }
 
             // remove old instances!
@@ -125,7 +160,10 @@ namespace Cove.Server.HostedServices
 
                     case "fish":
                         // dont spawn too many because it WILL LAG players!
-                        if (server.serverOwnedInstances.Count > 15)
+                        int ownedCount;
+                        lock (server.stateLock)
+                            ownedCount = server.serverOwnedInstances.Count;
+                        if (ownedCount > 15)
                             return;
                         WFActor a = server.spawnFish();
                         break;
@@ -163,8 +201,13 @@ namespace Cove.Server.HostedServices
 
         void spawnBirds()
         {
-            int birdCount = server.allActors.FindAll(a => a.Type == "ambient_bird").Count;
+            int birdCount;
+            lock (server.stateLock) // allActors is modified from the network and callback threads
+                birdCount = server.allActors.FindAll(a => a.Type == "ambient_bird").Count;
             if (birdCount > 8)
+                return;
+
+            if (server.trash_points == null || server.trash_points.Count == 0)
                 return;
 
             Random ran = new Random();

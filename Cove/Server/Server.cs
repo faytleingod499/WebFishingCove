@@ -78,13 +78,30 @@ namespace Cove.Server
         public List<Vector3> hidden_spot;
 
         Dictionary<string, IHostedService> services = new();
-        public readonly object serverActorListLock = new();
+
+        /// <summary>
+        /// Single lock guarding all shared server state (players, actors, chalk canvases).
+        /// Steam callbacks, the network thread and the timer services all run on different threads, and the
+        /// state they share is made of plain Lists. One lock (instead of several) means no lock-ordering deadlocks.
+        /// Monitor locks are re-entrant, so nested use on the same thread is fine.
+        /// </summary>
+        public readonly object stateLock = new();
+
+        // kept for plugin / service compatibility, it is the same lock as stateLock
+        public object serverActorListLock => stateLock;
 
         public List<string> WantedTags = new();
 
         public List<PreviousPlayer> PreviousPlayers = new();
         
-        public async void Init()
+        // Init used to be `async void`, which meant any exception during startup escaped the caller's try/catch
+        // and killed the process. It is now a normal blocking call so failures reach Program.cs.
+        public void Init()
+        {
+            InitAsync().GetAwaiter().GetResult();
+        }
+
+        private async Task InitAsync()
         {
             cbThread = new(runSteamworksUpdate);
             cbThread.Name = "Steamworks Callback Thread";
@@ -94,12 +111,18 @@ namespace Cove.Server
 
             Log("Loading world!");
             string worldFile = $"{AppDomain.CurrentDomain.BaseDirectory}worlds/main_zone.tscn";
+            // a previous failed download used to leave an empty file behind, which then passed the Exists check forever
+            if (File.Exists(worldFile) && new FileInfo(worldFile).Length == 0)
+                File.Delete(worldFile);
+
             if (!File.Exists(worldFile))
             {
                 var res = await DownloadWorldFile();
                 if (!res)
                 {
                     Error("Failed to download main_zone.tscn!");
+                    Error("Place main_zone.tscn in the worlds folder next to the server and start it again.");
+                    return;
                 }
             }
 
@@ -117,6 +140,14 @@ namespace Cove.Server
             shoreline_points = WorldFile.readPoints("shoreline_point", mapFile);
             hidden_spot = WorldFile.readPoints("hidden_spot", mapFile);
 
+            // spawning picks random entries from these, an empty list would throw on every spawn tick
+            if (fish_points.Count == 0 || trash_points.Count == 0 || shoreline_points.Count == 0 || hidden_spot.Count == 0)
+            {
+                Error("main_zone.tscn is missing spawn points (fish_spawn, trash_point, shoreline_point or hidden_spot).");
+                Error("The file may be corrupt, delete the worlds folder to download it again.");
+                return;
+            }
+
             Log("World Loaded!");
 
             Log("Reading server.cfg");
@@ -131,7 +162,10 @@ namespace Cove.Server
                         break;
 
                     case "maxPlayers":
-                        MaxPlayers = int.Parse(config[key]);
+                        if (int.TryParse(config[key], out int parsedMax) && parsedMax > 0)
+                            MaxPlayers = parsedMax;
+                        else
+                            Log($"\"{config[key]}\" is not a valid maxPlayers value, using {MaxPlayers}.");
                         break;
 
                     case "code":
@@ -139,7 +173,11 @@ namespace Cove.Server
                         break;
 
                     case "rainSpawnMultiplyer":
-                        rainMultiplyer = float.Parse(config[key]);
+                        // invariant culture so "1.5" works on machines that use a decimal comma
+                        if (float.TryParse(config[key], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float parsedRain))
+                            rainMultiplyer = parsedRain;
+                        else
+                            Log($"\"{config[key]}\" is not a valid rainSpawnMultiplyer value, using {rainMultiplyer}.");
                         break;
 
                     case "codeOnly":
@@ -285,7 +323,7 @@ namespace Cove.Server
             services["host_spawn"] = hostSpawnService;
             services["host_spawn_metal"] = hostSpawnMetalService;
 
-            Callback<LobbyCreated_t>.Create((LobbyCreated_t param) =>
+            Callback<LobbyCreated_t>.Create(Guard<LobbyCreated_t>("LobbyCreated", (LobbyCreated_t param) =>
             {
                 SteamLobby = new CSteamID(param.m_ulSteamIDLobby);
                 SteamMatchmaking.SetLobbyJoinable(SteamLobby, true);
@@ -334,9 +372,9 @@ namespace Cove.Server
                 }
                 */
 
-            });
+            }));
 
-            Callback<LobbyChatUpdate_t>.Create((LobbyChatUpdate_t param) =>
+            Callback<LobbyChatUpdate_t>.Create(Guard<LobbyChatUpdate_t>("LobbyChatUpdate", (LobbyChatUpdate_t param) =>
             {
                 CSteamID lobbyID = new CSteamID(param.m_ulSteamIDLobby);
 
@@ -371,6 +409,7 @@ namespace Cove.Server
                         if (player != null)
                         {
                             AllPlayers.Remove(player);
+                            allActors.Remove(player); // players are actors too, leaving them here leaked an entry per join
                             Log($"[{player.FisherID}] {player.Username} left. [{AllPlayers.Count}/{MaxPlayers}]");
 
                             Dictionary<string, object> leftPacket = new();
@@ -383,7 +422,8 @@ namespace Cove.Server
                             updatePlayercount();
 
                             // tell all plugins that the player left
-                            loadedPlugins.ForEach(plugin => plugin.plugin.onPlayerLeave(player));
+                            foreach (var plugin in loadedPlugins.ToList())
+                                SafePluginCall(plugin, () => plugin.plugin.onPlayerLeave(player));
 
                             // find the previous player and update their state
                             var previousPlayer = PreviousPlayers.Find(p => p.SteamId == player.SteamId);
@@ -403,11 +443,11 @@ namespace Cove.Server
                         }
                     }
                 }
-            });
+            }));
 
             listenSocket = SteamNetworkingSockets.CreateListenSocketP2P(0, 0, []);
 
-            Callback<SteamNetworkingMessagesSessionRequest_t>.Create((SteamNetworkingMessagesSessionRequest_t param) =>
+            Callback<SteamNetworkingMessagesSessionRequest_t>.Create(Guard<SteamNetworkingMessagesSessionRequest_t>("SessionRequest", (SteamNetworkingMessagesSessionRequest_t param) =>
             {
 
                 // if the player is banned reject the session request
@@ -430,9 +470,9 @@ namespace Cove.Server
                 sendWebLobbyPacket(new CSteamID(param.m_identityRemote.GetSteamID64()));
 
                 player.identity = param.m_identityRemote; // update the players identity
-            });
+            }));
 
-            Callback<LobbyChatMsg_t>.Create((LobbyChatMsg_t callback) =>
+            Callback<LobbyChatMsg_t>.Create(Guard<LobbyChatMsg_t>("LobbyChatMsg", (LobbyChatMsg_t callback) =>
             {
 
                 CSteamID userId = (CSteamID)callback.m_ulSteamIDUser;
@@ -517,7 +557,7 @@ namespace Cove.Server
                         sendPacketToPlayers(membersPacket);
                     }
                 }
-            });
+            }));
 
             // add two to the max because the server counts as player and add one overflow player
             if (friendsOnly)
@@ -536,12 +576,62 @@ namespace Cove.Server
                 return false;
         }
 
+        /// <summary>
+        /// Wraps a Steam callback so it runs under the shared state lock and can never throw.
+        /// An exception escaping a callback would otherwise propagate out of SteamAPI.RunCallbacks and kill the
+        /// callback thread, after which the server stops seeing joins, leaves and session requests.
+        /// </summary>
+        private Callback<T>.DispatchDelegate Guard<T>(string name, Action<T> callback)
+        {
+            // Steamworks.NET's Callback<T>.Create wants its own nested delegate type, an Action<T> doesn't convert to it
+            return (T param) =>
+            {
+                try
+                {
+                    lock (stateLock)
+                    {
+                        callback(param);
+                    }
+                }
+                catch (Exception e)
+                {
+                    logger.Error($"-- Error in Steam callback {name}! --");
+                    logger.Error(e.ToString());
+                }
+            };
+        }
+
+        /// <summary>
+        /// Runs a plugin hook, a plugin that throws must not be able to take the server down or stop other plugins from running.
+        /// </summary>
+        internal void SafePluginCall(PluginInstance plugin, Action call)
+        {
+            try
+            {
+                call();
+            }
+            catch (Exception e)
+            {
+                logger.Error($"Plugin \"{plugin.pluginName}\" threw an exception:");
+                logger.Error(e.ToString());
+            }
+        }
+
         void runSteamworksUpdate()
         {
             while (true)
             {
                 Thread.Sleep(1000/24); // 24hz
-                SteamAPI.RunCallbacks();
+                try
+                {
+                    SteamAPI.RunCallbacks();
+                }
+                catch (Exception e)
+                {
+                    // never let this thread die, without it the server can no longer see players join or leave
+                    logger.Error("-- Error running Steam callbacks! --");
+                    logger.Error(e.ToString());
+                }
             }
         }
 
@@ -562,24 +652,45 @@ namespace Cove.Server
                         didWork = true;
                         for (int j = 0; j < messages.Count; j++)
                         {
-                            if (i == 3 && messages[j].size > 50000)
+                            // every packet is handled on its own, so one malformed packet can't
+                            // cause the rest of the batch to be dropped
+                            try
                             {
-                                string UserName = SteamFriends.GetFriendPersonaName(new CSteamID(messages[j].identity));
-                                Log($"[{UserName}] Sent a chalk packet of size {messages[j].size} bytes");
-                                Log($"Due to the size of this packet, there is a chance it will not be processed correctly.");
+                                if (i == 3 && messages[j].size > 50000)
+                                {
+                                    string UserName = SteamFriends.GetFriendPersonaName(new CSteamID(messages[j].identity));
+                                    Log($"[{UserName}] Sent a chalk packet of size {messages[j].size} bytes");
+                                    Log($"Due to the size of this packet, there is a chance it will not be processed correctly.");
+                                }
+
+                                lock (stateLock)
+                                {
+                                    OnNetworkPacket(messages[j].payload, new CSteamID(messages[j].identity));
+                                }
                             }
-                            OnNetworkPacket(messages[j].payload, new CSteamID(messages[j].identity));
+                            catch (Exception e)
+                            {
+                                if (showErrorMessages)
+                                {
+                                    Log($"-- Error responding to packet from {messages[j].identity} on channel {i}! --");
+                                    Log(e.ToString());
+                                }
+                            }
                         }
                     }
                 }
-
                 catch (Exception e)
                 {
-                    if (!showErrorMessages)
-                        return;
+                    // This used to `return` when showErrors was off, which silently ended the network thread
+                    // and left a running server that never answered anyone again. Always keep the loop alive.
+                    if (showErrorMessages)
+                    {
+                        Log("-- Error receiving packets! --");
+                        Log(e.ToString());
+                    }
 
-                    Log("-- Error responding to packet! --");
-                    Log(e.ToString());
+                    // avoid a hot loop if the failure repeats every iteration
+                    Thread.Sleep(100);
                 }
 
                 if (!didWork)
@@ -587,18 +698,42 @@ namespace Cove.Server
             }
         }
 
+        private int stopping = 0;
+
         public void Stop()
         {
+            // Stop can be reached from the console, Ctrl+C, SIGTERM, the unhandled exception handler and the
+            // lobby ownership check at the same time, only the first caller should run the shutdown.
+            if (Interlocked.Exchange(ref stopping, 1) != 0)
+                return;
+
             Log("Server was told to stop.");
-            Dictionary<string, object> closePacket = new();
-            closePacket["type"] = "server_close";
-            sendPacketToPlayers(closePacket);
 
-            loadedPlugins.ForEach(plugin => plugin.plugin.onEnd()); // tell all plugins that the server is closing!
+            // every step is isolated, a failure in one (e.g. Steam never initialised) must not skip the rest
+            try
+            {
+                Dictionary<string, object> closePacket = new();
+                closePacket["type"] = "server_close";
+                sendPacketToPlayers(closePacket);
+            }
+            catch (Exception e) { logger.Error(e.ToString()); }
 
-            disconnectAllPlayers();
-            SteamMatchmaking.LeaveLobby(SteamLobby);
-            SteamAPI.Shutdown();
+            try
+            {
+                foreach (var plugin in loadedPlugins.ToList())
+                    SafePluginCall(plugin, () => plugin.plugin.onEnd()); // tell all plugins that the server is closing!
+            }
+            catch (Exception e) { logger.Error(e.ToString()); }
+
+            try
+            {
+                disconnectAllPlayers();
+                if (SteamLobby.m_SteamID != 0)
+                    SteamMatchmaking.LeaveLobby(SteamLobby);
+                SteamAPI.Shutdown();
+            }
+            catch (Exception e) { logger.Error(e.ToString()); }
+
             Environment.Exit(0);
         }
 
@@ -645,7 +780,17 @@ namespace Cove.Server
 
                 if (DoseCommandExist(command))
                 {
-                    InvokeCommand(sender, command, args);
+                    try
+                    {
+                        InvokeCommand(sender, command, args);
+                    }
+                    catch (Exception e)
+                    {
+                        // a command with bad arguments must not stop the chat message reaching plugins
+                        logger.Error($"Command \"{command}\" threw an exception:");
+                        logger.Error(e.ToString());
+                        messagePlayer("That command failed, check the arguments and try again.", sender.SteamId);
+                    }
                 }
                 else
                 {
@@ -654,9 +799,9 @@ namespace Cove.Server
                 }
             }
 
-            foreach (PluginInstance p in loadedPlugins)
+            foreach (PluginInstance p in loadedPlugins.ToList())
             {
-              p.plugin.handleChatMessage(sender, message, local, position, zone);
+                SafePluginCall(p, () => p.plugin.handleChatMessage(sender, message, local, position, zone));
             }
         }
 
@@ -668,26 +813,39 @@ namespace Cove.Server
             string downloadURL =
                 "https://raw.githubusercontent.com/Blizzardfur-Maxxx/Webfishing-Decompiled/refs/heads/main/Scenes/Map/Zones/main_zone.tscn";
             string worldDir = $"{AppDomain.CurrentDomain.BaseDirectory}worlds";
-            HttpClient client = new();
+            string worldPath = worldDir + "/main_zone.tscn";
+            string tempPath = worldPath + ".download";
 
             Directory.CreateDirectory(worldDir); // make the directory just in case.
-            
+
             try
             {
-                var resp = await client.GetAsync(downloadURL);
-                var fstream = File.Create(worldDir+"/main_zone.tscn");
+                // without a timeout a stalled connection hangs startup forever
+                using HttpClient client = new() { Timeout = TimeSpan.FromSeconds(30) };
+
+                // download first and only touch the disk once we have a good body. The old code created the
+                // file before reading the response, so any failure left an empty main_zone.tscn behind.
+                using var resp = await client.GetAsync(downloadURL);
+                resp.EnsureSuccessStatusCode();
                 var body = await resp.Content.ReadAsStringAsync();
-                
-                await fstream.WriteAsync(Encoding.UTF8.GetBytes(body));
-                fstream.Flush();
-                fstream.Close();
-                
+
+                if (string.IsNullOrWhiteSpace(body))
+                {
+                    Error("The downloaded zone file was empty.");
+                    return false;
+                }
+
+                // write to a temp file then move it into place, so a crash can't leave a half written file
+                await File.WriteAllTextAsync(tempPath, body, new UTF8Encoding(false));
+                File.Move(tempPath, worldPath, true);
+
                 Log("zone file downloaded!");
                 return true;
             }
-            catch (HttpRequestException e)
+            catch (Exception e) when (e is HttpRequestException || e is TaskCanceledException || e is IOException)
             {
                 Error(e.ToString());
+                try { if (File.Exists(tempPath)) File.Delete(tempPath); } catch { }
                 return false;
             }
         }

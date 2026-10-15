@@ -55,7 +55,9 @@ namespace Cove.Server.HostedServices
                 //server.gameLobby.SetData("server_browser_value", "0");
                 SteamMatchmaking.SetLobbyData(server.SteamLobby, "server_browser_value", "0");
 
-                int metalCount = server.serverOwnedInstances.FindAll(a => a.Type == "metal_spawn").Count;
+                int metalCount;
+                lock (server.stateLock) // the list is modified from other threads
+                    metalCount = server.serverOwnedInstances.FindAll(a => a.Type == "metal_spawn").Count;
                 if (metalCount > 7)
                     return;
 

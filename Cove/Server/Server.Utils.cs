@@ -79,16 +79,20 @@ namespace Cove.Server
             RainCloud cloud = new RainCloud(IId, pos);
             cloud.despawn = true;
 
-            lock (serverActorListLock)
+            lock (stateLock)
+            {
                 serverOwnedInstances.Add(cloud);
-
-            allActors.Add(cloud);
+                allActors.Add(cloud);
+            }
 
             return cloud;
         }
 
         public WFActor spawnFish(string fishType = "fish_spawn")
         {
+            if (fish_points == null || fish_points.Count == 0)
+                throw new InvalidOperationException("There are no fish spawn points loaded.");
+
             Vector3 pos = fish_points[(new Random()).Next(fish_points.Count)] + new Vector3(0,.08f,0);
             WFActor actor = spawnGenericActor(fishType, pos);
             actor.despawn = true;
@@ -119,7 +123,8 @@ namespace Cove.Server
 
         private WFActor findActorByID(long ID)
         {
-            return serverOwnedInstances.Find(a => a.InstanceID == ID);
+            lock (stateLock)
+                return serverOwnedInstances.Find(a => a.InstanceID == ID);
         }
 
         public WFActor spawnGenericActor(string type, Vector3 pos = null)
@@ -142,9 +147,11 @@ namespace Cove.Server
                 pos = Vector3.zero;
 
             WFActor actor = new WFActor(IId, type, pos);
-            lock (serverActorListLock)
+            lock (stateLock)
+            {
                 serverOwnedInstances.Add(actor);
-            allActors.Add(actor);
+                allActors.Add(actor);
+            }
 
             instanceSpacePrams["actor_type"] = type;
             instanceSpacePrams["at"] = pos;
@@ -171,8 +178,15 @@ namespace Cove.Server
 
             sendPacketToPlayers(removePacket); // remove
 
-            lock (serverActorListLock)
+            lock (stateLock)
+            {
                 serverOwnedInstances.Remove(instance);
+
+                // This list was never trimmed, so every despawned fish/bird/cloud stayed in memory forever, and
+                // since the bird limit counts "ambient_bird" entries in here, birds stopped spawning for good after
+                // the first few despawned.
+                allActors.Remove(instance);
+            }
         }
 
         private void sendPlayerAllServerActors(CSteamID id)
@@ -326,8 +340,9 @@ namespace Cove.Server
             if (id.m_SteamID == serverPlayer.SteamId.m_SteamID)
                 return true;
 
-            string adminSteamID = Admins.Find(a => long.Parse(a) == (long)id.m_SteamID);
-            return adminSteamID is string;
+            // admins.cfg is edited by hand, a single bad line used to make this throw for every permission check
+            string idString = id.m_SteamID.ToString();
+            return Admins.Any(a => a.Trim() == idString);
         }
 
         void updatePlayercount()
@@ -387,9 +402,15 @@ namespace Cove.Server
             Dictionary<int, object> localMembers = new();
 
             localMembers[0] = (long)serverPlayer.SteamId.m_SteamID;
-            for (int i = 0; i < AllPlayers.Count; i++)
+
+            // snapshot so a player joining or leaving mid-loop can't change the count under us
+            WFPlayer[] currentPlayers;
+            lock (stateLock)
+                currentPlayers = AllPlayers.ToArray();
+
+            for (int i = 0; i < currentPlayers.Length; i++)
             {
-                localMembers[i + 1] = (long)AllPlayers[i].SteamId.m_SteamID;
+                localMembers[i + 1] = (long)currentPlayers[i].SteamId.m_SteamID;
             }
 
             localMembersPacket["weblobby"] = localMembers;
