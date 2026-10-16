@@ -44,7 +44,7 @@ AppDomain.CurrentDomain.UnhandledException += (sender, args) =>
 {
     serverLogger.Fatal("Unhandled exception occured");
     serverLogger.Fatal(args.ExceptionObject.ToString());
-    webfishingServer.Stop();
+    webfishingServer.Stop(1);
 };
 
 // exceptions from fire-and-forget tasks are not fatal, but they should never vanish silently
@@ -81,7 +81,7 @@ try
 {
     serverLogger.Fatal("Error occored on main thread");
     serverLogger.Fatal(e.ToString());
-    webfishingServer.Stop();
+    webfishingServer.Stop(1);
 }
 
 // Init() returns without starting anything when setup failed (Steam not running, missing world file ...).
@@ -89,7 +89,7 @@ try
 if (webfishingServer.serverPlayer == null)
 {
     serverLogger.Fatal("The server failed to start, see the messages above.");
-    webfishingServer.Stop();
+    webfishingServer.Stop(1);
 }
 
 while (true)

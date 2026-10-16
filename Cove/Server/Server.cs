@@ -700,7 +700,8 @@ namespace Cove.Server
 
         private int stopping = 0;
 
-        public void Stop()
+        // exitCode 0 means a normal stop. Fatal errors pass 1 so a restart script can tell a crash from a deliberate stop.
+        public void Stop(int exitCode = 0)
         {
             // Stop can be reached from the console, Ctrl+C, SIGTERM, the unhandled exception handler and the
             // lobby ownership check at the same time, only the first caller should run the shutdown.
@@ -734,7 +735,7 @@ namespace Cove.Server
             }
             catch (Exception e) { logger.Error(e.ToString()); }
 
-            Environment.Exit(0);
+            Environment.Exit(exitCode);
         }
 
         /// <summary>

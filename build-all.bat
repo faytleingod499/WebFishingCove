@@ -12,6 +12,8 @@ for %%P in (AutoMessages ChalkObserver ChalkPersist ClearChalk DiscordBridge) do
     if errorlevel 1 goto failed
 )
 
+copy /y run-server.bat dist\ >nul
+
 echo.
 echo Done. Everything is in the dist folder.
 goto end
