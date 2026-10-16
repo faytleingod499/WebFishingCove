@@ -1,7 +1,9 @@
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using Cove.GodotFormat;
 using Cove.Server;
+using Cove.Server.Actor;
 using Cove.Server.Chalk;
 using Cove.Server.Plugins;
 
@@ -99,7 +101,76 @@ public class ChalkObserver : CovePlugin
     private int busy;
     private ulong lastSignature;
 
+    // Debug only: a copy of everything the clients sent, built straight from the incoming packets. Comparing it with
+    // what the server stored (stats.txt) shows whether cells are lost before or after they reach the server.
+    private volatile bool debugOn;
+    private readonly object mirrorLock = new();
+    private readonly Dictionary<long, Dictionary<(float, float), long>> mirror = new();
+    private readonly Dictionary<long, long[]> received = new(); // per canvas: packets, cells, malformed cells
+
     public ChalkObserver(CoveServer server) : base(server) { }
+
+    public override void onChalkUpdate(WFPlayer? sender, long canvasID, Dictionary<int, object> packet)
+    {
+        base.onChalkUpdate(sender, canvasID, packet);
+
+        if (!debugOn)
+            return;
+
+        try
+        {
+            long cells = 0, malformed = 0;
+            string bad = "";
+
+            lock (mirrorLock)
+            {
+                if (!mirror.TryGetValue(canvasID, out var image))
+                    mirror[canvasID] = image = new Dictionary<(float, float), long>();
+                if (!received.TryGetValue(canvasID, out long[]? totals))
+                    received[canvasID] = totals = new long[3];
+
+                foreach (object? entry in packet.Values)
+                {
+                    cells++;
+                    if (entry is Dictionary<int, object> cell
+                        && cell.TryGetValue(0, out object? rawPosition) && rawPosition is Vector2 position
+                        && cell.TryGetValue(1, out object? rawColor)
+                        && (rawColor is long || rawColor is int))
+                    {
+                        image[(position.x, position.y)] = Convert.ToInt64(rawColor);
+                    }
+                    else
+                    {
+                        malformed++;
+                        if (bad.Length == 0)
+                            bad = DescribeEntry(entry);
+                    }
+                }
+
+                totals[0]++;
+                totals[1] += cells;
+                totals[2] += malformed;
+            }
+
+            string who = sender?.Username ?? "unknown";
+            Log($"[chalk debug] canvas {canvasID}: {cells} cells from {who}" + (malformed > 0 ? $", {malformed} could not be read, first one was {bad}" : ""));
+        }
+        catch (Exception e)
+        {
+            Log($"[chalk debug] failed: {e.Message}");
+        }
+    }
+
+    private static string DescribeEntry(object? entry)
+    {
+        if (entry is Dictionary<int, object> cell)
+        {
+            string parts = string.Join(", ", cell.Select(p => $"{p.Key}={p.Value?.GetType().Name ?? "null"}"));
+            return $"a cell with [{parts}]";
+        }
+
+        return entry?.GetType().Name ?? "null";
+    }
 
     public override void onInit()
     {
@@ -311,6 +382,33 @@ public class ChalkObserver : CovePlugin
                 if (count > 0)
                     text.AppendLine($"  x from {minX} to {maxX}, y from {minY} to {maxY}");
                 text.AppendLine("  colour number: how many cells = " + string.Join(", ", colors.Select(c => $"{c.Key}: {c.Value}")));
+
+                lock (mirrorLock)
+                {
+                    if (mirror.TryGetValue(canvas.canvasID, out var sent) && received.TryGetValue(canvas.canvasID, out long[]? totals))
+                    {
+                        int onlyReceived = 0, onlyStored = 0, differentColour = 0;
+                        lock (canvas.chalkImage)
+                        {
+                            foreach (var entry in canvas.chalkImage)
+                            {
+                                if (!sent.TryGetValue((entry.Key.x, entry.Key.y), out long c))
+                                    onlyStored++;
+                                else if (c != entry.Value)
+                                    differentColour++;
+                            }
+
+                            foreach (var key in sent.Keys)
+                            {
+                                if (!canvas.chalkImage.ContainsKey(new Vector2(key.Item1, key.Item2)))
+                                    onlyReceived++;
+                            }
+                        }
+
+                        text.AppendLine($"  since debug was turned on: {totals[0]} packets, {totals[1]} cells received, {totals[2]} could not be read");
+                        text.AppendLine($"  {sent.Count} different cells received. Compared with what the server stored: {onlyReceived} received but not stored, {onlyStored} stored but not received, {differentColour} with a different colour");
+                    }
+                }
             }
 
             File.WriteAllText(Path.Combine(folderPath, "stats.txt"), text.ToString());
@@ -591,6 +689,7 @@ public class ChalkObserver : CovePlugin
         next.Scale = ReadInt(values, "scale", DefaultScale, 1, 6);
         next.SaveImages = ReadBool(values, "saveImages", true);
         next.Debug = ReadBool(values, "debug", false);
+        debugOn = next.Debug;
         next.MaxSavedImages = ReadInt(values, "maxSavedImages", DefaultMaxSavedImages, 0, 100000);
 
         if (values.TryGetValue("discordMessage", out string? message))
