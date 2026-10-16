@@ -778,7 +778,7 @@ namespace Cove.Server
                 return;
             }
 
-            Log($"[{sender.FisherID}] {sender.Username}: {message}");
+            Log($"[{(local ? "Local" : "Global")}] [{sender.FisherID}] {sender.Username}: {message}");
 
             // check if the first char is !, if so its a command
             if (message.StartsWith("!"))
