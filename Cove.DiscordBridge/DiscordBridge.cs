@@ -60,7 +60,7 @@ public class DiscordBridge : CovePlugin
         public bool RelayCommands;
         public bool RelayLocalChat = true;
         public string WebhookUrl = "";
-        public string GamePrefix = "[Discord]";
+        public string GamePrefix = "";
         public string GameColor = "ffffff";
 
         public bool Ready => Token.Length > 0 && ChannelId != 0;
@@ -445,7 +445,8 @@ public class DiscordBridge : CovePlugin
                 break;
             }
 
-            ParentServer.messageGlobal($"{s.GamePrefix} {message.Author}: {message.Text}", s.GameColor);
+            string tag = s.GamePrefix.Length > 0 ? s.GamePrefix + " " : "";
+            ParentServer.messageGlobal($"{tag}{message.Author}: {message.Text}", s.GameColor);
             Log($"Discord {message.Author}: {message.Text}");
             shown++;
         }
@@ -907,7 +908,8 @@ public class DiscordBridge : CovePlugin
             "#                      Integrations > Webhooks > New Webhook > Copy Webhook URL).",
             "#                      With it, game chat appears under each player's name",
             "#                      instead of the bot's. Leave empty to use the bot.",
-            "#  gamePrefix        = the tag shown before Discord messages in the game.",
+            "#  gamePrefix        = optional tag shown before the name of Discord messages in the game,",
+            "#                      like [Discord]. Leave empty to show only the name.",
             "#  gameColor         = colour of Discord messages in the game, like ff8800.",
             "#",
             "#  You can edit and save this file while the server is running, it is",
@@ -925,7 +927,7 @@ public class DiscordBridge : CovePlugin
             "relayLocalChat = true",
             "",
             "webhookUrl =",
-            "gamePrefix = [Discord]",
+            "gamePrefix =",
             "gameColor = ffffff",
             "",
         };
