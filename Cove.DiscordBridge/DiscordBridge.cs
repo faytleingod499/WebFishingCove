@@ -59,6 +59,7 @@ public class DiscordBridge : CovePlugin
         public bool RelayServerEvents = true;
         public bool RelayCommands;
         public bool RelayLocalChat = true;
+        public string WebhookUrl = "";
         public string GamePrefix = "[Discord]";
         public string GameColor = "ffffff";
 
@@ -75,7 +76,7 @@ public class DiscordBridge : CovePlugin
     private DateTime loadedWriteTime = DateTime.MinValue;
 
     // chat lines from the game, waiting for the worker to send them
-    private readonly ConcurrentQueue<string> outgoing = new();
+    private readonly ConcurrentQueue<(string? Name, string Text)> outgoing = new();
     private int queued;
 
     private readonly ConcurrentDictionary<string, long> lastLogged = new();
@@ -172,7 +173,7 @@ public class DiscordBridge : CovePlugin
         if (text.Length == 0)
             return;
 
-        Enqueue($"**{Escape(NameOf(sender))}**: {Escape(text)}");
+        Enqueue(Escape(text), NameOf(sender));
     }
 
     public override void onPlayerJoin(WFPlayer player)
@@ -269,7 +270,8 @@ public class DiscordBridge : CovePlugin
 
     // ---- game to Discord ----
 
-    private void Enqueue(string line)
+    // name is the player who chatted, null for server events
+    private void Enqueue(string text, string? name = null)
     {
         if (!GetSettings().Ready)
             return;
@@ -278,7 +280,7 @@ public class DiscordBridge : CovePlugin
         while (Volatile.Read(ref queued) >= MaxQueuedLines && outgoing.TryDequeue(out _))
             Interlocked.Decrement(ref queued);
 
-        outgoing.Enqueue(line);
+        outgoing.Enqueue((name, text));
         Interlocked.Increment(ref queued);
     }
 
@@ -287,37 +289,113 @@ public class DiscordBridge : CovePlugin
         if (outgoing.IsEmpty || Environment.TickCount64 < rateLimitedUntil)
             return;
 
+        // With a webhook every player's chat appears under their own name. Without one the bot posts
+        // everything, with the name written in bold in front of each line.
+        bool useWebhook = s.WebhookUrl.Length > 0;
+
         // several chat lines go out in one Discord message, that keeps the bridge far below Discord's rate limit
         var batch = new StringBuilder();
-        while (outgoing.TryPeek(out string? next))
+        string? batchName = null;
+        bool started = false;
+
+        while (outgoing.TryPeek(out var next))
         {
-            if (batch.Length > 0 && batch.Length + 1 + next.Length > MaxDiscordMessageLength)
-                break;
+            string line = useWebhook || next.Name == null ? next.Text : $"**{Escape(next.Name)}**: {next.Text}";
+
+            if (started)
+            {
+                if (useWebhook && next.Name != batchName)
+                    break; // a different sender needs its own message
+                if (batch.Length + 1 + line.Length > MaxDiscordMessageLength)
+                    break;
+            }
 
             if (!outgoing.TryDequeue(out _))
                 break;
             Interlocked.Decrement(ref queued);
 
-            if (batch.Length > 0)
+            if (!started)
+            {
+                started = true;
+                batchName = next.Name;
+            }
+            else
+            {
                 batch.Append('\n');
-            batch.Append(next);
+            }
+            batch.Append(line);
         }
 
-        if (batch.Length == 0)
+        if (!started)
             return;
 
         // allowed_mentions with nothing in it means a player typing @everyone can never ping anyone
         // flags 4 = don't create link previews for links players post
-        string json = JsonSerializer.Serialize(new
+        if (useWebhook)
+        {
+            string json = JsonSerializer.Serialize(new
+            {
+                content = batch.ToString(),
+                username = WebhookName(batchName),
+                allowed_mentions = new { parse = Array.Empty<string>() },
+                flags = 4,
+            });
+
+            using var request = new HttpRequestMessage(HttpMethod.Post, s.WebhookUrl)
+            {
+                Content = new StringContent(json, Encoding.UTF8, "application/json"),
+            };
+            request.Headers.TryAddWithoutValidation("User-Agent", UserAgent);
+
+            using HttpResponseMessage hookResponse = await Http.SendAsync(request, token);
+            if (!hookResponse.IsSuccessStatusCode)
+                HandleWebhookFailure(hookResponse);
+            return;
+        }
+
+        string botJson = JsonSerializer.Serialize(new
         {
             content = batch.ToString(),
             allowed_mentions = new { parse = Array.Empty<string>() },
             flags = 4,
         });
 
-        using HttpResponseMessage response = await SendAsync(s, HttpMethod.Post, $"/channels/{s.ChannelId}/messages", json, token);
+        using HttpResponseMessage response = await SendAsync(s, HttpMethod.Post, $"/channels/{s.ChannelId}/messages", botJson, token);
         if (!response.IsSuccessStatusCode)
             HandleFailure(response, "sending chat");
+    }
+
+    // Discord refuses webhook names that contain "discord" or "clyde" and wants 2 to 80 characters
+    private static string WebhookName(string? name)
+    {
+        string result = string.IsNullOrWhiteSpace(name) ? "Server" : name;
+        result = Regex.Replace(result, "discord", "disc0rd", RegexOptions.IgnoreCase);
+        result = Regex.Replace(result, "clyde", "cl7de", RegexOptions.IgnoreCase);
+        if (result.Length > 80)
+            result = result.Substring(0, 80);
+        if (result.Length < 2)
+            result += ".";
+        return result;
+    }
+
+    private void HandleWebhookFailure(HttpResponseMessage response)
+    {
+        int code = (int)response.StatusCode;
+
+        if (code == 429)
+        {
+            double wait = response.Headers.RetryAfter?.Delta?.TotalSeconds ?? 5;
+            rateLimitedUntil = Environment.TickCount64 + (long)((Math.Min(wait, 60) + 1) * 1000);
+            LogThrottled("hook429", "Discord asked the bridge to slow down, waiting a moment.");
+        }
+        else if (code == 401 || code == 404)
+        {
+            LogThrottled("hook404", $"Discord does not accept the webhookUrl (it may have been deleted). Check webhookUrl in {FileName}.");
+        }
+        else
+        {
+            LogThrottled("hook" + code, $"Discord answered HTTP {code} while sending through the webhook.");
+        }
     }
 
     // ---- Discord to game ----
@@ -542,8 +620,12 @@ public class DiscordBridge : CovePlugin
     // the bot token is a secret, it never goes into the log
     private string Scrub(string text)
     {
-        string token = GetSettings().Token;
-        return token.Length == 0 ? text : text.Replace(token, "[token]");
+        Settings s = GetSettings();
+        if (s.Token.Length > 0)
+            text = text.Replace(s.Token, "[token]");
+        if (s.WebhookUrl.Length > 0)
+            text = text.Replace(s.WebhookUrl, "[webhook]");
+        return text;
     }
 
     private static string NameOf(WFPlayer player)
@@ -671,6 +753,19 @@ public class DiscordBridge : CovePlugin
             next.GamePrefix = CleanText(prefix, 30, forGame: false);
 
         next.GameColor = ReadHex(values, "gameColor", "ffffff");
+
+        if (values.TryGetValue("webhookUrl", out string? hook) && hook.Length > 0)
+        {
+            string url = hook.Trim();
+            bool valid = Uri.TryCreate(url, UriKind.Absolute, out Uri? uri)
+                && uri.Scheme == Uri.UriSchemeHttps
+                && (uri.Host == "discord.com" || uri.Host == "discordapp.com" || uri.Host == "canary.discord.com" || uri.Host == "ptb.discord.com")
+                && uri.AbsolutePath.StartsWith("/api/webhooks/");
+            if (valid)
+                next.WebhookUrl = url;
+            else
+                Log("webhookUrl is not a Discord webhook link, the bot will post chat instead.");
+        }
 
         lock (sync)
             settings = next;
@@ -808,6 +903,10 @@ public class DiscordBridge : CovePlugin
             "#                      is how in game commands are typed. Normally off.",
             "#  relayLocalChat    = true or false. Also post local chat, the kind only",
             "#                      nearby players can hear in the game.",
+            "#  webhookUrl        = optional. A webhook for the SAME channel (Edit Channel >",
+            "#                      Integrations > Webhooks > New Webhook > Copy Webhook URL).",
+            "#                      With it, game chat appears under each player's name",
+            "#                      instead of the bot's. Leave empty to use the bot.",
             "#  gamePrefix        = the tag shown before Discord messages in the game.",
             "#  gameColor         = colour of Discord messages in the game, like ff8800.",
             "#",
@@ -825,6 +924,7 @@ public class DiscordBridge : CovePlugin
             "relayCommands = false",
             "relayLocalChat = true",
             "",
+            "webhookUrl =",
             "gamePrefix = [Discord]",
             "gameColor = ffffff",
             "",
