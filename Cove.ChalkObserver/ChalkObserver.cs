@@ -137,7 +137,7 @@ public class ChalkObserver : CovePlugin
                         && cell.TryGetValue(1, out object? rawColor)
                         && (rawColor is long || rawColor is int))
                     {
-                        image[(position.x, position.y)] = Convert.ToInt64(rawColor);
+                        image[(MathF.Truncate(position.x), MathF.Truncate(position.y))] = Convert.ToInt64(rawColor);
                     }
                     else
                     {
@@ -452,7 +452,8 @@ public class ChalkObserver : CovePlugin
                     if (!float.IsFinite(x) || !float.IsFinite(y) || Math.Abs(x) > 4096 || Math.Abs(y) > 4096)
                         continue;
 
-                    cells.Add(new Cell((int)MathF.Round(x), (int)MathF.Round(y), entry.Value));
+                    // the game cuts positions down to whole pixels, so do the same
+                    cells.Add(new Cell((int)MathF.Truncate(x), (int)MathF.Truncate(y), entry.Value));
                 }
             }
         }
