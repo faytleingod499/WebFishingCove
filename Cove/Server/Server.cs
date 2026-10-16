@@ -168,6 +168,13 @@ namespace Cove.Server
                             Log($"\"{config[key]}\" is not a valid maxPlayers value, using {MaxPlayers}.");
                         break;
 
+                    case "chalkCanvasSize":
+                        if (int.TryParse(config[key], out int parsedChalkSize) && parsedChalkSize >= 0)
+                            Chalk.ChalkCanvas.CanvasSize = parsedChalkSize;
+                        else
+                            Log($"\"{config[key]}\" is not a valid chalkCanvasSize value, using {Chalk.ChalkCanvas.CanvasSize}.");
+                        break;
+
                     case "code":
                         LobbyCode = config[key].ToUpper();
                         break;

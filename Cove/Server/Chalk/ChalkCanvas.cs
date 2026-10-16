@@ -37,6 +37,16 @@ namespace Cove.Server.Chalk
         // client sending endless unique coordinates can't grow the dictionary until the server runs out of memory.
         private const int MaxCells = 250_000;
 
+        /// <summary>
+        /// Chalk cells have to sit between 0 and this value (both ways, inclusive) on a canvas. The game's own client
+        /// only lets you chalk on the canvas, but a modified client can send any position it likes. 0 turns the check off.
+        /// Set with chalkCanvasSize in server.cfg.
+        /// </summary>
+        public static int CanvasSize = 200;
+
+        /// <summary>How many cells were refused because they were outside the canvas, a running total.</summary>
+        public int rejectedOutsideCanvas;
+
         private void updateCanvasImage(Dictionary<int, object> transformations)
         {
             int[] allowedCanvas = { 0, 1, 2, 3 };
@@ -65,6 +75,13 @@ namespace Cove.Server.Chalk
                     if (!float.IsFinite(coords.x) || !float.IsFinite(coords.y))
                         continue; // NaN never equals itself, it would add a new entry every time
                     coords = new Vector2(MathF.Truncate(coords.x), MathF.Truncate(coords.y));
+
+                    int size = CanvasSize;
+                    if (size > 0 && (coords.x < 0 || coords.y < 0 || coords.x > size || coords.y > size))
+                    {
+                        rejectedOutsideCanvas++;
+                        continue;
+                    }
 
                     if (chalkImage.Count >= MaxCells && !chalkImage.ContainsKey(coords))
                         continue;

@@ -40,6 +40,9 @@ namespace Cove.Server
         // Safety valve for the per canvas cell dictionary, vanilla canvases are far smaller than this.
         private const int MaxChalkCellsPerPacket = 250_000;
 
+        // when each player was last named in the log for sending chalk outside the canvas
+        private readonly Dictionary<ulong, long> lastOutsideChalkLog = new();
+
         // ---- safe readers for attacker controlled packet data ----
 
         private static bool TryGetDict(Dictionary<string, object> source, string key, out Dictionary<string, object> value)
@@ -303,7 +306,21 @@ namespace Cove.Server
                             chalkCanvas.Add(canvas);
                         }
 
+                        int rejectedBefore = canvas.rejectedOutsideCanvas;
                         canvas.chalkUpdate(chalkData);
+                        int rejected = canvas.rejectedOutsideCanvas - rejectedBefore;
+                        if (rejected > 0)
+                        {
+                            // say who sent it, but not more than once a minute per player or the log fills up
+                            long nowTicks = Environment.TickCount64;
+                            if (!lastOutsideChalkLog.TryGetValue(sender.m_SteamID, out long lastLogged) || nowTicks - lastLogged > 60_000)
+                            {
+                                lastOutsideChalkLog[sender.m_SteamID] = nowTicks;
+                                string who = AllPlayers.Find(p => p.SteamId.m_SteamID == sender.m_SteamID)?.Username ?? "unknown";
+                                Log($"Ignored {rejected} chalk cells outside canvas {canvasID} sent by {who} ({sender.m_SteamID}).");
+                            }
+                        }
+
                         WFPlayer? from = AllPlayers.Find(p =>
                             p.SteamId.m_SteamID == sender.m_SteamID
                         );
