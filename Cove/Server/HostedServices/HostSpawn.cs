@@ -92,8 +92,9 @@ namespace Cove.Server.HostedServices
                     server.logger.Fatal("Make sure you have a good connection to steam, this happends when the server disconnects from steam");
                     server.logger.Fatal("If your internet is unstable, this will happen often!");
 
-                    // stop the server
-                    server.Stop();
+                    // stop the server. Exit code 2 (not 0) so run-server.bat knows this wasn't a deliberate stop and
+                    // starts it again, the server can't host anymore once it has lost its Steam connection.
+                    server.Stop(2);
                     return;
                 }
             }
