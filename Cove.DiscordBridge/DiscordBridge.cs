@@ -175,6 +175,15 @@ public class DiscordBridge : CovePlugin
         if (text.Length == 0)
             return;
 
+        // The game writes %u where the player's name goes. The server fills it in for normal chat and /me messages, but
+        // not for things like "%u ranked up to rank 67!", so do it here. Those are announcements about the player,
+        // not something they said, so they are posted as a plain line instead of under their name.
+        if (text.Contains("%u"))
+        {
+            Enqueue($"*{Escape(text.Replace("%u", NameOf(sender)))}*");
+            return;
+        }
+
         Enqueue(Escape(text), NameOf(sender));
     }
 
