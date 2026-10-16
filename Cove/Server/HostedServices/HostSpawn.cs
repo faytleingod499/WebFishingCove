@@ -82,9 +82,14 @@ namespace Cove.Server.HostedServices
         private void DoWorkInner()
         {
             // check that the host of the lobby is still the server
-            if (SteamMatchmaking.GetLobbyOwner(server.SteamLobby).m_SteamID != server.serverPlayer.SteamId.m_SteamID)
+            ulong lobbyOwner = SteamMatchmaking.GetLobbyOwner(server.SteamLobby).m_SteamID;
+            if (lobbyOwner != server.serverPlayer.SteamId.m_SteamID)
             {
                 ownerMismatches++;
+
+                // owner 0 means Steam has no information about the lobby (connection to Steam lost), any other id
+                // means another player took over hosting
+                server.logger.Warning($"Lobby owner check {ownerMismatches}/{OwnerMismatchesBeforeStop} failed: the owner is {lobbyOwner}, expected {server.serverPlayer.SteamId.m_SteamID}. Lobby {server.SteamLobby.m_SteamID}, Steam logged on: {SteamUser.BLoggedOn()}.");
                 if (ownerMismatches >= OwnerMismatchesBeforeStop)
                 {
                     // somthing has gone wrong, the server is no longer the host of the lobby
