@@ -63,6 +63,7 @@ public class DiscordBridge : CovePlugin
         public bool Debug;
         public string GamePrefix = "";
         public string GameColor = "ffffff";
+        public bool ColorWithTags; // true: colour the text with [color=#...] tags instead of the packet's colour field
 
         public bool Ready => Token.Length > 0 && ChannelId != 0;
 
@@ -478,7 +479,11 @@ public class DiscordBridge : CovePlugin
             }
 
             string tag = s.GamePrefix.Length > 0 ? s.GamePrefix + " " : "";
-            ParentServer.messageGlobal($"{tag}{message.Author}: {message.Text}", s.GameColor);
+            string line = $"{tag}{message.Author}: {message.Text}";
+            if (s.ColorWithTags && s.GameColor != "ffffff")
+                ParentServer.messageGlobal($"[color=#{s.GameColor}]{line}[/color]");
+            else
+                ParentServer.messageGlobal(line, s.GameColor);
             Log($"Discord {message.Author}: {message.Text}");
             shown++;
         }
@@ -788,6 +793,12 @@ public class DiscordBridge : CovePlugin
 
         next.GameColor = ReadHex(values, "gameColor", "ffffff");
 
+        string method = values.TryGetValue("colorMethod", out string? rawMethod) ? rawMethod.Trim().ToLowerInvariant() : "packet";
+        if (method == "tags" || method == "bbcode")
+            next.ColorWithTags = true;
+        else if (method != "packet" && method.Length > 0)
+            Log("colorMethod must be packet or tags, using packet.");
+
         if (values.TryGetValue("webhookUrl", out string? hook) && hook.Length > 0)
         {
             string url = hook.Trim();
@@ -945,6 +956,9 @@ public class DiscordBridge : CovePlugin
             "#  gamePrefix        = optional tag shown before the name of Discord messages in the game,",
             "#                      like [Discord]. Leave empty to show only the name.",
             "#  gameColor         = colour of Discord messages in the game, like ff8800.",
+            "#  colorMethod       = packet or tags. How the colour is applied. If the colour has no",
+            "#                      effect in the game with packet, try tags. If the text then shows",
+            "#                      [color=...] literally, go back to packet.",
             "#",
             "#  You can edit and save this file while the server is running, it is",
             "#  picked up within about 10 seconds.",
@@ -964,6 +978,7 @@ public class DiscordBridge : CovePlugin
             "debug = false",
             "gamePrefix =",
             "gameColor = ffffff",
+            "colorMethod = packet",
             "",
         };
 
