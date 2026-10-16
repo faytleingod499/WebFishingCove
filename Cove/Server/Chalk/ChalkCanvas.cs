@@ -58,6 +58,14 @@ namespace Cove.Server.Chalk
                         || !cell.TryGetValue(1, out object? rawColor) || !TryReadColor(rawColor, out long color))
                         continue;
 
+                    // Clients send stroke positions with fractions (62.0, 62.4, 62.9 ...), but the game turns them into whole
+                    // pixels by cutting off the fraction. Keyed by the raw floats, the same pixel was stored several times
+                    // and which colour won depended on dictionary order, so details drawn on top of earlier chalk went
+                    // missing. Storing the whole pixel makes the newest colour always replace the old one.
+                    if (!float.IsFinite(coords.x) || !float.IsFinite(coords.y))
+                        continue; // NaN never equals itself, it would add a new entry every time
+                    coords = new Vector2(MathF.Truncate(coords.x), MathF.Truncate(coords.y));
+
                     if (chalkImage.Count >= MaxCells && !chalkImage.ContainsKey(coords))
                         continue;
 
