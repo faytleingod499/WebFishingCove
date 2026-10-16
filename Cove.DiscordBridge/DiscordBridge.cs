@@ -117,7 +117,7 @@ public class DiscordBridge : CovePlugin
         Settings s = GetSettings();
         if (!s.Ready)
             Log($"The bridge is off, put a botToken and channelId in {FileName}.");
-        else if (s.RelayServerEvents)
+        else if (s.RelayServerEvents && !ParentServer.PluginsReloading)
             Enqueue("**Server started.**");
 
         cancel = new CancellationTokenSource();
@@ -130,7 +130,8 @@ public class DiscordBridge : CovePlugin
         base.onEnd();
 
         Settings s = GetSettings();
-        if (s.Ready && s.RelayServerEvents)
+        // a plugin reload is not the server stopping
+        if (s.Ready && s.RelayServerEvents && !ParentServer.PluginsReloading)
             Enqueue("**Server stopped.**");
 
         // stop the worker first, then send what is left ourselves so the stop message actually goes out

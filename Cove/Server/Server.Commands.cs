@@ -64,6 +64,19 @@ namespace Cove.Server
             );
             SetCommandDescription("help", "Shows all commands");
 
+            RegisterCommand(
+                "reloadplugins",
+                (player, args) =>
+                {
+                    if (!isPlayerAdmin(player.SteamId)) return;
+                    // !reloadplugins reloads all of them, !reloadplugins <id> only the plugin with that id
+                    messagePlayer("Reloading plugins...", player.SteamId);
+                    messagePlayer(reloadPlugins(args.Length > 0 ? args[0] : null), player.SteamId);
+                },
+                ["reload"]
+            );
+            SetCommandDescription("reloadplugins", "Reloads the plugins from the plugins folder, or one plugin by its id");
+
             RegisterCommand(command: "exit", aliases: ["shutdown"], cb: (player, args) =>
             {
                 // make sure the player is the host
