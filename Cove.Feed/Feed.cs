@@ -3,14 +3,14 @@ using Cove.Server.Actor;
 using Cove.Server.Plugins;
 
 /// <summary>
-/// Adds the command  !feed  for everybody. The player gets a chat message saying they fed the wolves.
-/// To change the wording, edit the Replies list below and rebuild.
+/// Adds the command  !feed  for everybody. Everybody sees a chat message saying who fed the wolves.
+/// To change the wording, edit the Replies list below and rebuild, {0} is the player's name.
 /// </summary>
 public class Feed : CovePlugin
 {
     private static readonly string[] Replies =
     [
-        "You fed the wolves.",
+        "{0} fed the wolves.",
     ];
 
     public Feed(CoveServer server) : base(server) { }
@@ -26,7 +26,7 @@ public class Feed : CovePlugin
             {
                 try
                 {
-                    SendPlayerChatMessage(player, Replies[Random.Shared.Next(Replies.Length)]);
+                    SendGlobalChatMessage(string.Format(Replies[Random.Shared.Next(Replies.Length)], player.Username));
                 }
                 catch (Exception e)
                 {
