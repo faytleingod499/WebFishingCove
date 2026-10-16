@@ -60,6 +60,7 @@ public class DiscordBridge : CovePlugin
         public bool RelayCommands;
         public bool RelayLocalChat = true;
         public string WebhookUrl = "";
+        public bool Debug;
         public string GamePrefix = "";
         public string GameColor = "ffffff";
 
@@ -281,6 +282,8 @@ public class DiscordBridge : CovePlugin
             Interlocked.Decrement(ref queued);
 
         outgoing.Enqueue((name, text));
+        if (GetSettings().Debug)
+            Log($"[bridge debug] queued a line for Discord ({Volatile.Read(ref queued) + 1} waiting).");
         Interlocked.Increment(ref queued);
     }
 
@@ -349,7 +352,15 @@ public class DiscordBridge : CovePlugin
 
             using HttpResponseMessage hookResponse = await Http.SendAsync(request, token);
             if (!hookResponse.IsSuccessStatusCode)
+            {
+                string detail = await ReadBodyAsync(hookResponse, token);
+                Log($"[bridge] The webhook send failed: HTTP {(int)hookResponse.StatusCode} {Scrub(detail)}");
                 HandleWebhookFailure(hookResponse);
+            }
+            else if (s.Debug)
+            {
+                Log($"[bridge debug] sent {batch.Length} characters through the webhook (HTTP {(int)hookResponse.StatusCode}).");
+            }
             return;
         }
 
@@ -362,7 +373,28 @@ public class DiscordBridge : CovePlugin
 
         using HttpResponseMessage response = await SendAsync(s, HttpMethod.Post, $"/channels/{s.ChannelId}/messages", botJson, token);
         if (!response.IsSuccessStatusCode)
+        {
+            string detail = await ReadBodyAsync(response, token);
+            Log($"[bridge] The bot send failed: HTTP {(int)response.StatusCode} {Scrub(detail)}");
             HandleFailure(response, "sending chat");
+        }
+        else if (s.Debug)
+        {
+            Log($"[bridge debug] sent {batch.Length} characters through the bot (HTTP {(int)response.StatusCode}).");
+        }
+    }
+
+    private static async Task<string> ReadBodyAsync(HttpResponseMessage response, CancellationToken token)
+    {
+        try
+        {
+            string body = await response.Content.ReadAsStringAsync(token);
+            return body.Length > 300 ? body.Substring(0, 300) : body;
+        }
+        catch (Exception)
+        {
+            return "";
+        }
     }
 
     // Discord refuses webhook names that contain "discord" or "clyde" and wants 2 to 80 characters
@@ -744,6 +776,7 @@ public class DiscordBridge : CovePlugin
         }
 
         next.PollSeconds = ReadInt(values, "pollInterval", DefaultPollSeconds, MinPollSeconds, 60);
+        next.Debug = ReadBool(values, "debug", false);
         next.DiscordToGame = ReadBool(values, "discordToGame", true);
         next.RelayJoinLeave = ReadBool(values, "relayJoinLeave", true);
         next.RelayServerEvents = ReadBool(values, "relayServerEvents", true);
@@ -908,6 +941,7 @@ public class DiscordBridge : CovePlugin
             "#                      Integrations > Webhooks > New Webhook > Copy Webhook URL).",
             "#                      With it, game chat appears under each player's name",
             "#                      instead of the bot's. Leave empty to use the bot.",
+            "#  debug             = true or false. Logs every line queued and sent, for tracking down problems.",
             "#  gamePrefix        = optional tag shown before the name of Discord messages in the game,",
             "#                      like [Discord]. Leave empty to show only the name.",
             "#  gameColor         = colour of Discord messages in the game, like ff8800.",
@@ -927,6 +961,7 @@ public class DiscordBridge : CovePlugin
             "relayLocalChat = true",
             "",
             "webhookUrl =",
+            "debug = false",
             "gamePrefix =",
             "gameColor = ffffff",
             "",
