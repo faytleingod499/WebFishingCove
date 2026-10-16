@@ -41,19 +41,31 @@ public class ChalkObserver : CovePlugin
 
     private static readonly byte[] DefaultBackground = { 0x6E, 0x6E, 0x6E };
     private static readonly byte[] DividerColor = { 0x1E, 0x1E, 0x1E };
-    private static readonly byte[] UnknownColor = { 0xFF, 0x00, 0xFF };
+    // drawn for a chalk colour number that has no colour set (see "colorN" in chalkobserver.txt)
+    private static readonly byte[] UnknownColor = { 0xFF, 0xFF, 0xFF };
 
-    // index = the chalk colour number the game uses: black, white, red, blue, yellow, special, green
-    private static readonly byte[][] DefaultPalette =
+    // The highest colour number that can be set in the config file (color0 to color255)
+    private const int MaxPaletteSize = 256;
+
+    // Position in this list = the chalk colour number sent by the game, so colour 0 is the first entry.
+    private static readonly string[] DefaultPaletteHex =
     {
-        new byte[] { 0x11, 0x11, 0x11 },
-        new byte[] { 0xF2, 0xF2, 0xF2 },
-        new byte[] { 0xD9, 0x36, 0x36 },
-        new byte[] { 0x3A, 0x6F, 0xE0 },
-        new byte[] { 0xF0, 0xCF, 0x2A },
-        new byte[] { 0xB4, 0x55, 0xE0 },
-        new byte[] { 0x3F, 0xAE, 0x4A },
+        "ffe7c5", "2a3844", "d70b5d", "0db39e", "f4c009", "ff00ff",
+        "bac357", "a3b2d2", "d6cec2", "bfded8", "a9c484", "5d937b",
+        "a2a6a9", "777f8f", "eab281", "ea7286", "f4a4bf", "a07ca7",
+        "bf796d", "f5d1b6", "e3e19f", "ffdf00", "ffbf00", "c4b454",
+        "f5deb3", "f4c430", "00ffff", "89cff0", "4d4dff", "00008b",
+        "4169e1", "006742", "4cbb17", "2e6f40", "2e8b57", "c0c0c0",
+        "818589", "899499", "708090", "ffa500", "ff8c00", "d7942d",
+        "ff5f1f", "cc7722", "ff69b4", "ff10f0", "aa336a", "f4b4c4",
+        "953553", "d8bfd8", "7f00ff", "800080", "ff2400", "ff4433",
+        "a52a2a", "913831", "ff0000", "3b2219", "a16e4b", "d4aa78",
+        "e6bc98", "ffe7d1",
     };
+
+    // must be declared after DefaultPaletteHex, static fields are set up in the order they appear
+    private static readonly byte[][] DefaultPalette =
+        DefaultPaletteHex.Select(hex => Convert.FromHexString(hex)).ToArray();
 
     private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(30) };
 
@@ -201,6 +213,8 @@ public class ChalkObserver : CovePlugin
         if (signature == lastSignature)
             return; // nothing changed since the last picture
 
+        WarnAboutUnknownColors(canvases, s);
+
         byte[] png = RenderPng(canvases, s);
         lastSignature = signature;
 
@@ -223,6 +237,25 @@ public class ChalkObserver : CovePlugin
 
         if (s.WebhookUrl.Length > 0)
             await SendToDiscordAsync(png, fileName, s, token);
+    }
+
+    // Each colour number is reported once (and only a handful of them, a client can send any number it likes),
+    // so the log shows which "colorN" lines are missing without being flooded.
+    private readonly HashSet<long> warnedColors = new();
+
+    private void WarnAboutUnknownColors(List<Cell>[] canvases, Settings s)
+    {
+        foreach (List<Cell> list in canvases)
+        {
+            foreach (Cell cell in list)
+            {
+                if (cell.Color >= s.Palette.Length && warnedColors.Count < 20 && warnedColors.Add(cell.Color))
+                {
+                    Log($"Chalk colour number {cell.Color} has no colour set, so it is drawn white. " +
+                        $"Add a line like \"color{cell.Color} = ff8800\" to {FileName} to set it.");
+                }
+            }
+        }
     }
 
     // ---- reading the canvases ----
@@ -508,8 +541,7 @@ public class ChalkObserver : CovePlugin
         next.WebhookUrl = hook;
 
         next.Background = ReadColor(values, "background", DefaultBackground);
-        for (int i = 0; i < next.Palette.Length; i++)
-            next.Palette[i] = ReadColor(values, $"color{i}", DefaultPalette[i]);
+        next.Palette = ReadPalette(values);
 
         settings = next;
 
@@ -589,6 +621,37 @@ public class ChalkObserver : CovePlugin
         return (byte[])fallback.Clone();
     }
 
+    // Starts from the built in colours and applies every "colorN = rrggbb" line of the config file on top.
+    // Lines past the end of the built in list (for example color62) add new colours.
+    private byte[][] ReadPalette(Dictionary<string, string> values)
+    {
+        var palette = new List<byte[]>(DefaultPalette.Select(color => (byte[])color.Clone()));
+
+        foreach (string key in values.Keys)
+        {
+            if (!key.StartsWith("color", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            if (!int.TryParse(key.AsSpan(5), out int number) || number < 0)
+                continue; // some other key that happens to start with "color"
+
+            if (number >= MaxPaletteSize)
+            {
+                Log($"{key} is ignored, colour numbers go up to {MaxPaletteSize - 1}.");
+                continue;
+            }
+
+            // leave gaps (for example if only color70 is set) as the "unknown" colour
+            while (palette.Count <= number)
+                palette.Add((byte[])UnknownColor.Clone());
+
+            byte[] fallback = number < DefaultPalette.Length ? DefaultPalette[number] : UnknownColor;
+            palette[number] = ReadColor(values, key, fallback);
+        }
+
+        return palette.ToArray();
+    }
+
     private static bool IsDiscordWebhook(string url)
     {
         if (!Uri.TryCreate(url, UriKind.Absolute, out Uri? uri))
@@ -659,16 +722,16 @@ public class ChalkObserver : CovePlugin
             "#  You can edit and save this file while the server is running, it is",
             "#  picked up within about 10 seconds.",
             "#",
-            "#  Optional colours (hex, like ff8800). Remove the # in front to change one.",
-            "#  The defaults are only close to the in-game chalk colours.",
+            "#  Colours (hex, like ff8800 or #ff8800). All of these are optional, remove the",
+            "#  # in front of a line to change that colour.",
+            "#",
+            "#  background   = the colour of an empty canvas.",
+            "#  colorN       = the colour for chalk colour number N (starts at color0).",
+            "#                 Up to color255 works. If the log says a colour number has no",
+            "#                 colour set, add a line for it here.",
+            "#",
             "#    background = 6e6e6e",
-            "#    color0 = 111111   (black)",
-            "#    color1 = f2f2f2   (white)",
-            "#    color2 = d93636   (red)",
-            "#    color3 = 3a6fe0   (blue)",
-            "#    color4 = f0cf2a   (yellow)",
-            "#    color5 = b455e0   (special)",
-            "#    color6 = 3fae4a   (green)",
+            "@@COLORS@@",
             "# ======================================================================",
             "",
             "checkInterval = 60",
@@ -681,7 +744,18 @@ public class ChalkObserver : CovePlugin
             "",
         };
 
-        File.WriteAllText(filePath, string.Join(Environment.NewLine, lines));
+        // one commented line per built in colour, written from the same list the plugin uses
+        var colorLines = new StringBuilder();
+        for (int i = 0; i < DefaultPaletteHex.Length; i++)
+        {
+            if (i > 0)
+                colorLines.Append(Environment.NewLine);
+            colorLines.Append($"#    color{i} = {DefaultPaletteHex[i]}");
+        }
+
+        string text = string.Join(Environment.NewLine, lines).Replace("@@COLORS@@", colorLines.ToString());
+
+        File.WriteAllText(filePath, text);
         Log($"Created {FileName}, set your Discord webhook and check interval in it.");
     }
 }
