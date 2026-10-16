@@ -76,6 +76,7 @@ public class ChalkObserver : CovePlugin
         public int IntervalSeconds = DefaultIntervalSeconds;
         public int Scale = DefaultScale;
         public bool SaveImages = true;
+        public bool Debug;
         public int MaxSavedImages = DefaultMaxSavedImages;
         public string WebhookUrl = "";
         public string DiscordMessage = DefaultMessage;
@@ -215,6 +216,9 @@ public class ChalkObserver : CovePlugin
 
         WarnAboutUnknownColors(canvases, s);
 
+        if (s.Debug)
+            WriteStats();
+
         byte[] png = RenderPng(canvases, s);
         lastSignature = signature;
 
@@ -255,6 +259,65 @@ public class ChalkObserver : CovePlugin
                         $"Add a line like \"color{cell.Color} = ff8800\" to {FileName} to set it.");
                 }
             }
+        }
+    }
+
+    // ---- debugging ----
+
+    // Writes ChalkObserver/stats.txt with what the server really holds for each canvas: how many cells, how far
+    // they reach, whether positions are whole numbers, and how often each colour number is used.
+    private void WriteStats()
+    {
+        try
+        {
+            var text = new StringBuilder();
+            text.AppendLine($"Written {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+
+            ChalkCanvas[] canvases;
+            lock (ParentServer.stateLock)
+                canvases = ParentServer.chalkCanvas.ToArray();
+
+            foreach (ChalkCanvas canvas in canvases.OrderBy(c => c.canvasID))
+            {
+                int count = 0, erased = 0, fractional = 0;
+                float minX = float.MaxValue, minY = float.MaxValue, maxX = float.MinValue, maxY = float.MinValue;
+                var colors = new SortedDictionary<long, int>();
+
+                lock (canvas.chalkImage)
+                {
+                    foreach (var entry in canvas.chalkImage)
+                    {
+                        count++;
+                        float x = entry.Key.x, y = entry.Key.y;
+                        if (x != MathF.Floor(x) || y != MathF.Floor(y))
+                            fractional++;
+                        minX = Math.Min(minX, x);
+                        maxX = Math.Max(maxX, x);
+                        minY = Math.Min(minY, y);
+                        maxY = Math.Max(maxY, y);
+
+                        if (entry.Value == (long)COLOR.NONE)
+                        {
+                            erased++;
+                            continue;
+                        }
+
+                        colors[entry.Value] = colors.TryGetValue(entry.Value, out int n) ? n + 1 : 1;
+                    }
+                }
+
+                text.AppendLine();
+                text.AppendLine($"Canvas {canvas.canvasID}: {count} cells stored, {erased} erased, {fractional} with a position that is not a whole number");
+                if (count > 0)
+                    text.AppendLine($"  x from {minX} to {maxX}, y from {minY} to {maxY}");
+                text.AppendLine("  colour number: how many cells = " + string.Join(", ", colors.Select(c => $"{c.Key}: {c.Value}")));
+            }
+
+            File.WriteAllText(Path.Combine(folderPath, "stats.txt"), text.ToString());
+        }
+        catch (Exception e)
+        {
+            Log($"Could not write stats.txt: {e.Message}");
         }
     }
 
@@ -527,6 +590,7 @@ public class ChalkObserver : CovePlugin
         next.IntervalSeconds = ReadInt(values, "checkInterval", DefaultIntervalSeconds, MinIntervalSeconds, 86400);
         next.Scale = ReadInt(values, "scale", DefaultScale, 1, 6);
         next.SaveImages = ReadBool(values, "saveImages", true);
+        next.Debug = ReadBool(values, "debug", false);
         next.MaxSavedImages = ReadInt(values, "maxSavedImages", DefaultMaxSavedImages, 0, 100000);
 
         if (values.TryGetValue("discordMessage", out string? message))
@@ -737,6 +801,7 @@ public class ChalkObserver : CovePlugin
             "checkInterval = 60",
             "scale = 3",
             "saveImages = true",
+            "debug = false",
             "maxSavedImages = 500",
             "",
             "discordWebhook =",
