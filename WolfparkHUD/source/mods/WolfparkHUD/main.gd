@@ -7,6 +7,8 @@ extends Node
 # On such a server, anything you type that starts with ! goes only to the server and is not shown in chat.
 
 const CONFIG_PATH = "user://wolfparkhud.json"
+const TITLE_ID = "title_lonely"
+const TITLE_NAME = "Lonely"
 const DEFAULT_POS = Vector2(16, 52)
 const FEED_DEBOUNCE_MS = 1500
 const BUY_DEBOUNCE_MS = 1500
@@ -48,6 +50,7 @@ var gamble_ready_at = 0
 var title_text = ""
 var title_color = Color(0.0, 1.0, 1.0)
 var chat_color = ""
+var prev_title = ""
 var chat_connected = false
 
 
@@ -65,10 +68,18 @@ func _ready():
 	_build_ui()
 	_load_config()
 	_connect_chat()
+	_register_title()
+	_revoke_title() # in case the game was closed while the title was still handed out
 
 
 func _exit_tree():
 	_unlock_hud()
+	_revoke_title()
+
+
+func _notification(what):
+	if what == MainLoop.NOTIFICATION_WM_QUIT_REQUEST:
+		_revoke_title()
 
 
 func _build_ui():
@@ -251,6 +262,7 @@ func _process(delta):
 	if poll_timer >= 0.5:
 		poll_timer = 0.0
 		_poll()
+		_sync_title()
 	_refresh()
 	# the game reads its keys before this node runs, so let go of its controls only after that
 	if pending_unlock:
@@ -356,6 +368,64 @@ func _rebuild_shop():
 		button.set_meta("label", item["label"])
 		shop_box.add_child(button)
 	shop_panel.rect_size = Vector2(0, 0)
+
+
+# --- the Lonely title ---
+# A real title in the game's own list (Cosmetics > Misc). It is registered all the time, so the game can
+# show it on other players, but only handed out to the player while they are on the server.
+# Someone wearing it looks like a default character to players without this mod, so it is taken off
+# again when they leave the server or close the game.
+
+func _register_title():
+	var globals = get_node_or_null("/root/Globals")
+	if globals == null or globals.cosmetic_data.has(TITLE_ID):
+		return
+	var script = load("res://Resources/Scripts/cosmetic_resource.gd")
+	if script == null:
+		return
+	var res = script.new()
+	res.name = TITLE_NAME + " Title"
+	res.desc = "Only for Wolf Park."
+	res.title = TITLE_NAME
+	res.category = "title"
+	res.cos_internal_id = 0
+	res.in_rotation = false
+	res.chest_reward = false
+	globals.cosmetic_data[TITLE_ID] = {"file": res}
+
+
+func _sync_title():
+	if active:
+		_grant_title()
+	else:
+		_revoke_title()
+
+
+func _grant_title():
+	var data = get_node_or_null("/root/PlayerData")
+	if data == null:
+		return
+	_register_title()
+	if not data.cosmetics_unlocked.has(TITLE_ID):
+		data.cosmetics_unlocked.append(TITLE_ID)
+	var worn = data.cosmetics_equipped.get("title", "")
+	if worn != TITLE_ID and worn != prev_title:
+		prev_title = worn
+		_save_config()
+
+
+func _revoke_title():
+	var data = get_node_or_null("/root/PlayerData")
+	if data == null:
+		return
+	if data.cosmetics_unlocked.has(TITLE_ID):
+		data.cosmetics_unlocked.erase(TITLE_ID)
+	if data.cosmetics_equipped.get("title", "") == TITLE_ID:
+		var globals = get_node_or_null("/root/Globals")
+		var back = prev_title
+		if back == "" or back == TITLE_ID or globals == null or not globals.cosmetic_data.has(back):
+			back = "title_rank_1"
+		data.cosmetics_equipped["title"] = back
 
 
 # --- server messages in colour ---
@@ -688,11 +758,13 @@ func _load_config():
 	file.close()
 	if typeof(data) == TYPE_DICTIONARY and data.has("x") and data.has("y"):
 		panel.rect_position = Vector2(float(data["x"]), float(data["y"]))
+	if typeof(data) == TYPE_DICTIONARY and data.has("prev_title"):
+		prev_title = str(data["prev_title"])
 
 
 func _save_config():
 	var file = File.new()
 	if file.open(CONFIG_PATH, File.WRITE) != OK:
 		return
-	file.store_string(to_json({"x": panel.rect_position.x, "y": panel.rect_position.y}))
+	file.store_string(to_json({"x": panel.rect_position.x, "y": panel.rect_position.y, "prev_title": prev_title}))
 	file.close()
