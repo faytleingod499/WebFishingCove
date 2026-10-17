@@ -6,7 +6,7 @@
 script = ExtResource( 1 )
 name = "Battery Charger"
 desc = "Only for Wolf Park."
-title = "Battery Charger"
+title = "[color=#29B6FF][wave amp=20 freq=5]Battery Charger[/wave][/color]"
 species_alt_mesh = [  ]
 main_color = Color( 1, 1, 1, 1 )
 body_pattern = [  ]
