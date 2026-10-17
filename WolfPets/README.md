@@ -10,6 +10,7 @@ Needs [GDWeave](https://github.com/NotNite/GDWeave). Copy the `WolfPets` folder 
 
 ## Using it
 
+- Press **P** (or click the paw button) to open the pet menu.
 - A small **paw button** sits on the left of the screen. Drag it anywhere, it remembers where.
 - Click it to open the pet menu:
   - **Show my wolf** turns your wolf on or off.
@@ -19,6 +20,16 @@ Needs [GDWeave](https://github.com/NotNite/GDWeave). Copy the `WolfPets` folder 
     palette to put it back on, or **x** to delete it. Saving under the same name updates it.
 - Your choice is saved and shared through the Steam lobby, so other players with this mod see your
   wolf in your colours. Players without the mod do not see pets.
+
+## Petting
+
+Walk up to any wolf (yours or someone else's) and press the game's interact key when it shows
+**Pet wolf**. The wolf comes to stand in front of you, wags its tail, and you lean in and stroke its
+head. The pose fits your size: the wolf raises its head for a big player and lowers it, or lies down,
+for a small one, and you lean forward, straighten up or reach up as needed. Moving or sitting stops
+it. Other players with the mod see the petting too.
+
+When you sit down, your wolf lies down next to you.
 
 ## Building
 

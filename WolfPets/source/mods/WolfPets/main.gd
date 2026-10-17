@@ -6,11 +6,14 @@ extends Node
 # Your colours are shared through the Steam lobby, so other players who have this mod see your wolf
 # exactly as you made it. Players without the mod do not see pets at all. Works on any server.
 
-const VERSION = "1.1.0"
+const VERSION = "1.2.0"
 const CONFIG_PATH = "user://wolfpets.json"
 const MODEL_PATH = "res://mods/WolfPets/wolf_pet.scn"
 const SHADOW_PATH = "res://Scenes/Entities/Shadow/shadow.tscn"
 const SYNC_KEY = "wolfpet"
+const PAT_KEY = "wolfpat"   # "<wolf owner's steam id>;<count>" while petting, empty otherwise
+const AREA_SCRIPT = "res://mods/WolfPets/pet_area.gd"
+const SKELETON_PATH = "body/player_body/Armature/Skeleton"
 const POPUP_ID = "WOLFPETS"
 const DEFAULT_PAW_POS = Vector2(16, 140)
 
@@ -18,6 +21,8 @@ const PET_SCALE = 0.82    # about 60% of a player's height
 const FOLLOW_NEAR = 2.1    # stops when this close to its owner
 const FOLLOW_FAR = 3.0     # starts walking again when further than this
 const MAX_PALETTES = 12
+const PAT_TIME = 3.5       # seconds of petting
+const LIE_AFTER = 0.6      # seconds after its owner sits down
 const TELEPORT_DIST = 16.0 # this far behind it just appears next to its owner again
 const WALK_SPEED = 3.0
 const RUN_SPEED = 7.5
@@ -55,6 +60,13 @@ var pets = {}
 var remote_cfg = {} # steam id -> {"show": bool, "colors": {}, "raw": text}
 var read_timer = 0.0
 
+# petting: petter key ("me" or a steam id) -> {petter, pet_key, phase, t, w, start, lean, neck}
+var pats = {}
+var my_pat_seq = 0
+var pat_read_timer = 0.0
+var remote_pat_seen = {}
+var area_script = null
+
 # the paw button and the menu
 var layer
 var paw
@@ -78,6 +90,8 @@ func _ready():
 	if Engine.has_singleton("Steam"):
 		steam = Engine.get_singleton("Steam")
 	model_scene = load(MODEL_PATH)
+	if ResourceLoader.exists(AREA_SCRIPT):
+		area_script = load(AREA_SCRIPT)
 	if ResourceLoader.exists(SHADOW_PATH):
 		shadow_scene = load(SHADOW_PATH)
 	_reset_colors("Grey")
@@ -89,6 +103,8 @@ func _ready():
 
 func _exit_tree():
 	_unlock_hud()
+	if pats.has("me"):
+		_send_pat("")
 	for key in pets.keys():
 		_remove_pet(key)
 
@@ -154,7 +170,14 @@ func _process(delta):
 		read_timer = 0.0
 		_read_remote(lobby)
 
+	# someone else starting or stopping to pet a wolf is read more often, so it starts quickly
+	pat_read_timer += delta
+	if pat_read_timer >= 0.2:
+		pat_read_timer = 0.0
+		_read_remote_pats(lobby, net)
+
 	_update_pets(delta, net)
+	_update_pats(delta)
 
 
 func _read_remote(lobby):
@@ -208,12 +231,17 @@ func _update_pets(delta, net):
 			if pet == null:
 				continue
 			pets[key] = pet
+			if pet["area"] != null:
+				pet["area"].pet_key = key
 		var pet = pets[key]
 		var sig = str(wanted[key][2].hash())
 		if pet["sig"] != sig:
 			pet["sig"] = sig
 			_paint(pet, wanted[key][2])
-		_move_pet(pet, owner_node, delta)
+		if pet["pat"] == null:
+			_move_pet(pet, owner_node, delta)
+		if pet["area"] != null and is_instance_valid(pet["area"]):
+			pet["area"].visible = pet["pat"] == null
 
 
 # --- making a pet ---
@@ -235,6 +263,20 @@ func _make_pet(owner_node):
 		var shadow = shadow_scene.instance()
 		node.add_child(shadow)
 
+	# the spot the game's interact key finds, so walking up to a wolf offers "Pet wolf"
+	var area = null
+	if area_script != null:
+		area = Area.new()
+		area.set_script(area_script)
+		area.mod = self
+		var shape = CollisionShape.new()
+		var sphere = SphereShape.new()
+		sphere.radius = 0.9 * PET_SCALE
+		shape.shape = sphere
+		shape.translation = Vector3(0, 0.6 * PET_SCALE, 0)
+		area.add_child(shape)
+		node.add_child(area)
+
 	var anim = model.find_node("AnimationPlayer", true, false)
 	var meshes = []
 	_collect_meshes(model, meshes)
@@ -252,10 +294,11 @@ func _make_pet(owner_node):
 
 	# start next to its owner
 	var start = owner_node.global_transform.origin + Vector3(1.0, 0, 1.0).normalized() * FOLLOW_NEAR
-	node.global_transform.origin = _ground(node, start, owner_node.global_transform.origin.y)
+	node.global_transform.origin = _ground(node, start, _feet_y(owner_node))
 
 	var pet = {"node": node, "model": model, "anim": anim, "mats": mats, "owner": owner_node,
-		"speed": 0.0, "still": 0.0, "anim_name": "", "sig": "", "moving": false}
+		"speed": 0.0, "still": 0.0, "anim_name": "", "sig": "", "moving": false, "sat": 0.0,
+		"area": area, "pat": null, "skeleton": model.find_node("Skeleton", true, false)}
 	_play(pet, "wolf_idle", 1.0)
 	return pet
 
@@ -296,7 +339,7 @@ func _move_pet(pet, owner_node, delta):
 
 	if dist > TELEPORT_DIST:
 		var back = Vector3(1.0, 0, 1.0).normalized() * FOLLOW_NEAR
-		node.global_transform.origin = _ground(node, target + back, target.y)
+		node.global_transform.origin = _ground(node, target + back, _feet_y(owner_node))
 		pet["speed"] = 0.0
 		pet["still"] = 0.0
 		pet["moving"] = false
@@ -316,7 +359,7 @@ func _move_pet(pet, owner_node, delta):
 	var dir = flat / dist if dist > 0.001 else Vector3()
 	if pet["speed"] > 0.05:
 		pos += dir * min(pet["speed"] * delta, dist)
-	pos = _ground(node, pos, target.y, pos.y, delta)
+	pos = _ground(node, pos, _feet_y(owner_node), pos.y, delta)
 	node.global_transform.origin = pos
 
 	# turn to where it walks, or to its owner while standing
@@ -332,7 +375,41 @@ func _move_pet(pet, owner_node, delta):
 		_play(pet, "wolf_walk", rate)
 	else:
 		pet["still"] += delta
-		_play(pet, "wolf_sit" if pet["still"] > SIT_AFTER else "wolf_idle", 1.0)
+		# lies down next to its owner while they sit, otherwise sits after a while
+		if _is_sitting(owner_node):
+			pet["sat"] += delta
+		else:
+			pet["sat"] = 0.0
+		if pet["sat"] > LIE_AFTER:
+			_play(pet, "wolf_lie", 1.0)
+		else:
+			_play(pet, "wolf_sit" if pet["still"] > SIT_AFTER else "wolf_idle", 1.0)
+
+
+func _is_sitting(player):
+	var data = player.get("animation_data")
+	if typeof(data) == TYPE_DICTIONARY and data.get("sitting") == true:
+		return true
+	return player.get("sitting") == true and player.get("controlled") == true
+
+
+# a player's origin is at the middle of their body, a metre (times their size) above their feet
+func _feet_y(player):
+	return player.global_transform.origin.y - player.global_transform.basis.y.length()
+
+
+# how big a player is drawn, whatever made them bigger or smaller
+func _player_size(player):
+	var skel = player.get_node_or_null(SKELETON_PATH)
+	if skel != null:
+		return skel.global_transform.basis.get_scale().y
+	return player.global_transform.basis.get_scale().y
+
+
+func _facing(node):
+	var f = -node.global_transform.basis.z
+	f.y = 0
+	return f.normalized() if f.length() > 0.001 else Vector3(0, 0, -1)
 
 
 # the floor under a spot; when there is none it keeps to its owner's height
@@ -356,6 +433,253 @@ func _play(pet, name, rate):
 	if pet["anim_name"] != name and anim.has_animation(name):
 		pet["anim_name"] = name
 		anim.play(name, 0.3)
+
+
+# --- petting ---
+
+# the game's interact key on a wolf
+func _on_pet_activated(pet_key, actor):
+	if actor == null or actor.get("controlled") != true or pats.has("me") or not pets.has(pet_key):
+		return
+	if pets[pet_key]["pat"] != null:
+		return # someone is already petting it
+	_start_pat("me", actor, pet_key)
+	my_pat_seq += 1
+	_send_pat(str(_owner_steam_id(pet_key)) + ";" + str(my_pat_seq))
+
+
+func _owner_steam_id(pet_key):
+	if str(pet_key) == "me":
+		var net = get_node_or_null("/root/Network")
+		return net.STEAM_ID if net != null else 0
+	return pet_key
+
+
+func _send_pat(text):
+	var net = get_node_or_null("/root/Network")
+	if steam == null or net == null or net.PLAYING_OFFLINE or net.STEAM_LOBBY_ID <= 0:
+		return
+	if steam.has_method("setLobbyMemberData"):
+		steam.setLobbyMemberData(net.STEAM_LOBBY_ID, PAT_KEY, text)
+
+
+func _read_remote_pats(lobby, net):
+	if lobby <= 0 or steam == null or not steam.has_method("getLobbyMemberData") or net == null:
+		return
+	for player in get_tree().get_nodes_in_group("player"):
+		if not _is_real_player(player) or player.get("controlled") == true:
+			continue
+		var id = player.get("owner_id")
+		var text = str(steam.getLobbyMemberData(lobby, id, PAT_KEY))
+		if text == str(remote_pat_seen.get(id, "")):
+			continue
+		remote_pat_seen[id] = text
+		if text == "":
+			if pats.has(id):
+				_end_pat(id, false)
+			continue
+		var bits = text.split(";")
+		var owner = int(bits[0])
+		var pet_key = "me" if owner == int(net.STEAM_ID) else owner
+		if pets.has(pet_key):
+			_start_pat(id, player, pet_key)
+
+
+func _start_pat(petter_key, petter, pet_key):
+	for k in pats.keys():
+		if str(pats[k]["pet_key"]) == str(pet_key) or str(k) == str(petter_key):
+			_drop_pat(k)
+	pats[petter_key] = {"petter": petter, "pet_key": pet_key, "phase": "approach", "t": 0.0, "w": 0.0,
+		"start": petter.global_transform.origin, "lean": 0.0, "neck": 0.0, "low": false,
+		"head_off": 0.75 * PET_SCALE}
+	pets[pet_key]["pat"] = petter_key
+
+
+# winds the petting down smoothly, or drops it at once
+func _end_pat(petter_key, at_once):
+	if not pats.has(petter_key):
+		return
+	if str(petter_key) == "me":
+		_send_pat("")
+	if at_once:
+		_drop_pat(petter_key)
+	elif pats[petter_key]["phase"] != "out":
+		pats[petter_key]["phase"] = "out"
+
+
+func _drop_pat(petter_key):
+	var pat = pats.get(petter_key)
+	if pat == null:
+		return
+	_clear_pose(pat)
+	if pets.has(pat["pet_key"]) and str(pets[pat["pet_key"]]["pat"]) == str(petter_key):
+		var pet = pets[pat["pet_key"]]
+		pet["pat"] = null
+		pet["still"] = 0.0
+		pet["moving"] = false
+	pats.erase(petter_key)
+
+
+# lets go of the bones this petting bent
+func _clear_pose(pat):
+	var petter = pat["petter"]
+	if is_instance_valid(petter):
+		var sk = petter.get_node_or_null(SKELETON_PATH)
+		if sk != null:
+			for name in ["torso", "arm.r"]:
+				var b = sk.find_bone(name)
+				if b >= 0:
+					sk.set_bone_global_pose_override(b, Transform(), 0.0, true)
+	if pets.has(pat["pet_key"]):
+		var ws = pets[pat["pet_key"]]["skeleton"]
+		if ws != null and is_instance_valid(ws) and ws.find_bone("neck") >= 0:
+			ws.set_bone_global_pose_override(ws.find_bone("neck"), Transform(), 0.0, true)
+
+
+func _update_pats(delta):
+	for k in pats.keys():
+		var pat = pats[k]
+		var petter = pat["petter"]
+		if not is_instance_valid(petter) or not pets.has(pat["pet_key"]) or not is_instance_valid(pets[pat["pet_key"]]["node"]):
+			_end_pat(k, true)
+			continue
+		var pet = pets[pat["pet_key"]]
+		pat["t"] += delta
+
+		# walking away or sitting down stops it
+		var here = petter.global_transform.origin
+		var moved = Vector2(here.x - pat["start"].x, here.z - pat["start"].z).length()
+		if pat["phase"] != "out" and (moved > 0.5 * _player_size(petter) or _is_sitting(petter)):
+			_end_pat(k, pat["phase"] == "approach")
+			if not pats.has(k):
+				continue
+
+		var size = _player_size(petter)
+		var fwd = _facing(petter)
+		var node = pet["node"]
+		# the wolf stands right in front of the player, facing them, its head within reach
+		var spot = here + fwd * (0.37 * size + pat["head_off"])
+		spot = _ground(node, spot, _feet_y(petter))
+		var face_yaw = atan2(fwd.x, fwd.z) # looking back at the player
+
+		if pat["phase"] == "approach":
+			var pos = node.global_transform.origin
+			var to = Vector3(spot.x - pos.x, 0, spot.z - pos.z)
+			var dist = to.length()
+			if dist < 0.08 or pat["t"] > 4.0:
+				node.global_transform.origin = spot
+				pat["phase"] = "pet"
+				pat["t"] = 0.0
+			else:
+				var step = min(WALK_SPEED * delta, dist)
+				pos += to / dist * step
+				node.global_transform.origin = _ground(node, pos, spot.y, pos.y, delta)
+				node.rotation.y = lerp_angle(node.rotation.y, atan2(-to.x, -to.z), clamp(delta * 10.0, 0.0, 1.0))
+				_play(pet, "wolf_walk", 1.8)
+			continue
+
+		node.rotation.y = lerp_angle(node.rotation.y, face_yaw, clamp(delta * 8.0, 0.0, 1.0))
+		node.global_transform.origin = node.global_transform.origin.linear_interpolate(spot, clamp(delta * 4.0, 0.0, 1.0))
+		# for a very small player it lies down so its head comes down to them
+		_play(pet, "wolf_lie" if pat["low"] else "wolf_happy", 1.0)
+		if pat["phase"] == "pet":
+			pat["w"] = min(1.0, pat["w"] + delta * 3.0)
+			if pat["t"] > PAT_TIME:
+				_end_pat(k, false)
+		else:
+			pat["w"] -= delta * 3.0
+			if pat["w"] <= 0.0:
+				_drop_pat(k)
+				continue
+		_pose_pat(pat, pet, petter, size)
+
+
+# the size-aware part: the wolf lifts or lowers its head toward the player's hand height, and the
+# player leans forward (or straightens up, or reaches up when small) until their hand meets its head
+func _pose_pat(pat, pet, petter, size):
+	var w = clamp(pat["w"], 0.0, 1.0)
+	var sk = petter.get_node_or_null(SKELETON_PATH)
+	var ws = pet["skeleton"]
+	if sk == null or ws == null or not is_instance_valid(ws):
+		return
+	var torso = sk.find_bone("torso")
+	var arm = sk.find_bone("arm.r")
+	var elbow = sk.find_bone("elbow.r")
+	var hand = sk.find_bone("hand.r")
+	var neck = ws.find_bone("neck")
+	var head = ws.find_bone("head")
+	if torso < 0 or arm < 0 or elbow < 0 or hand < 0 or neck < 0 or head < 0:
+		return
+	var W = sk.global_transform
+	var shoulder_w = W.xform(sk.get_bone_global_pose_no_override(arm).origin)
+
+	# the wolf's head: tip it down for a small player, up for a big one
+	var WW = ws.global_transform
+	var wolf_fwd = _facing(pet["node"])
+	var wolf_axis = Vector3.UP.cross(wolf_fwd).normalized() # turning about this moves the head down
+	var g_neck = ws.get_bone_global_pose_no_override(neck)
+	var pivot = WW.xform(g_neck.origin)
+	var forehead = WW.xform(ws.get_bone_global_pose_no_override(head).origin) + wolf_fwd * 0.14 * PET_SCALE + Vector3.UP * 0.27 * PET_SCALE
+	var want_y = shoulder_w.y - 0.05 * size
+	if want_y < 0.55 * PET_SCALE / 0.82:
+		pat["low"] = true
+	var best = 0.0
+	var best_cost = 1e9
+	for i in range(31):
+		var deg = -25.0 + i * 2.5
+		var y = pivot.y + (forehead - pivot).rotated(wolf_axis, deg2rad(deg)).y
+		var cost = abs(y - want_y) + 0.0005 * abs(deg)
+		if cost < best_cost:
+			best_cost = cost
+			best = deg
+	pat["neck"] = lerp(pat["neck"], best, 0.15)
+	var neck_rad = deg2rad(pat["neck"])
+	var wolf_axis_s = WW.basis.inverse().xform(wolf_axis).normalized()
+	ws.set_bone_global_pose_override(neck, Transform(Basis(wolf_axis_s, neck_rad) * g_neck.basis, g_neck.origin), w, true)
+
+	# where the hand goes: the top of the head, stroking back and forth along it
+	var stroke = sin(pat["t"] * TAU * 1.3)
+	var target_w = pivot + (forehead - pivot).rotated(wolf_axis, neck_rad)
+	target_w += -wolf_fwd * (0.06 * PET_SCALE * stroke) + Vector3.UP * (0.02 * PET_SCALE * abs(stroke))
+	pat["target_w"] = target_w
+	var head_point = pivot + (forehead - pivot).rotated(wolf_axis, neck_rad)
+	var node_pos = pet["node"].global_transform.origin
+	pat["head_off"] = lerp(pat["head_off"], Vector2(head_point.x - node_pos.x, head_point.z - node_pos.z).length(), 0.1)
+	var target = W.affine_inverse().xform(target_w)
+
+	# the lean: tip the body forward until the shoulder is an arm's length from the target
+	var g_torso = sk.get_bone_global_pose_no_override(torso)
+	var g_arm = sk.get_bone_global_pose_no_override(arm)
+	var g_elbow = sk.get_bone_global_pose_no_override(elbow)
+	var g_hand = sk.get_bone_global_pose_no_override(hand)
+	# the fingertips: a little past the hand bone, along the forearm
+	var finger = 0.08
+	var tip_point = g_hand.origin + (g_hand.origin - g_elbow.origin).normalized() * finger
+	var reach = g_arm.origin.distance_to(g_elbow.origin) + g_elbow.origin.distance_to(g_hand.origin) + finger
+	var axis_s = W.basis.inverse().xform(Vector3.UP.cross(_facing(petter))).normalized()
+	var lean_best = 0.0
+	best_cost = 1e9
+	for i in range(37):
+		var deg = -15.0 + i * 2.5
+		var s = g_torso.origin + (g_arm.origin - g_torso.origin).rotated(axis_s, deg2rad(deg))
+		var cost = abs(s.distance_to(target) - 0.92 * reach) + 0.004 * abs(deg)
+		if cost < best_cost:
+			best_cost = cost
+			lean_best = deg
+	pat["lean"] = lerp(pat["lean"], lean_best, 0.15)
+	var torso_pose = Transform(Basis(axis_s, deg2rad(pat["lean"])) * g_torso.basis, g_torso.origin)
+	sk.set_bone_global_pose_override(torso, torso_pose, w, true)
+
+	# the arm: point the whole arm (shoulder to fingertips) at the target
+	var rebase = torso_pose * g_torso.affine_inverse()
+	var a = rebase * g_arm
+	var v = (rebase.xform(tip_point) - a.origin).normalized()
+	var d = (target - a.origin).normalized()
+	var c = v.cross(d)
+	var turn = Basis()
+	if c.length() > 0.0001:
+		turn = Basis(c.normalized(), acos(clamp(v.dot(d), -1.0, 1.0)))
+	sk.set_bone_global_pose_override(arm, Transform(turn * a.basis, a.origin), w, true)
 
 
 # --- the paw button ---
@@ -531,9 +855,24 @@ func _input(event):
 				_set_menu(not menu_open)
 		return
 
+	# P opens and closes the pet menu (the game has nothing on P)
+	if event is InputEventKey and event.pressed and not event.echo and event.scancode == KEY_P:
+		if not _typing() and (paw.visible or menu_open):
+			_set_menu(not menu_open)
+			get_tree().set_input_as_handled()
+			return
+
 	if menu_open and event is InputEventKey and event.pressed and event.scancode == KEY_ESCAPE:
 		_set_menu(false)
 		get_tree().set_input_as_handled()
+
+
+func _typing():
+	var hud = _get_hud()
+	if hud != null and hud.get("using_chat") == true:
+		return true
+	var focus = paw.get_focus_owner()
+	return focus != null and focus is LineEdit
 
 
 func _set_menu(open):
