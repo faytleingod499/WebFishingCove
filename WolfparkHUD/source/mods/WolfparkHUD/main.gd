@@ -45,6 +45,8 @@ var buy_ready_at = 0
 var gamble_ready_at = 0
 var title_text = ""
 var title_color = Color(0.0, 1.0, 1.0)
+var chat_color = ""
+var chat_connected = false
 
 var last_roll = -1
 var result_until = 0
@@ -62,6 +64,7 @@ func _ready():
 		steam = Engine.get_singleton("Steam")
 	_build_ui()
 	_load_config()
+	_connect_chat()
 
 
 func _exit_tree():
@@ -258,6 +261,10 @@ func _poll():
 	var color_text = str(steam.getLobbyData(lobby, "wp_title_color")).replace("#", "")
 	title_color = Color(color_text) if color_text.length() == 6 else Color(0.0, 1.0, 1.0)
 
+	chat_color = str(steam.getLobbyData(lobby, "wp_chat_color")).replace("#", "")
+	if chat_color.length() != 6:
+		chat_color = ""
+
 	# what the Buy button lists, "id~Label~price;id~Label~price"
 	var shop_text = str(steam.getLobbyData(lobby, "wp_shop"))
 	if shop_text != shop_signature:
@@ -342,6 +349,44 @@ func _rebuild_shop():
 		button.set_meta("label", item["label"])
 		shop_box.add_child(button)
 	shop_panel.rect_size = Vector2(0, 0)
+
+
+# --- server messages in colour ---
+
+func _connect_chat():
+	var net = get_node_or_null("/root/Network")
+	if net == null or chat_connected:
+		return
+	if net.has_signal("_chat_update"):
+		net.connect("_chat_update", self, "_on_chat_update")
+		chat_connected = true
+
+
+# Every chat line a player writes carries their coloured name, so a global line without any colour tag
+# comes from the server (or the game itself). Those get wrapped in the server colour.
+func _on_chat_update():
+	if not active or chat_color == "":
+		return
+	var net = get_node_or_null("/root/Network")
+	if net == null:
+		return
+	var lines = net.GAMECHAT_COLLECTIONS
+	var changed = false
+	for i in range(lines.size()):
+		var line = str(lines[i])
+		if line.find("[color=") == -1 and line.strip_edges() != "":
+			var body = line.substr(1) if line.begins_with("\n") else line
+			lines[i] = "\n[color=#" + chat_color + "]" + body + "[/color]"
+			changed = true
+	if not changed:
+		return
+	var all = ""
+	for line in lines:
+		all += str(line)
+	net.GAMECHAT = all
+	var hud = _get_hud()
+	if hud != null and hud.has_method("_chat_update"):
+		hud._chat_update()
 
 
 # --- showing it ---

@@ -76,6 +76,7 @@ public class Feed : CovePlugin
         public int MeteorCost = 10;
         public string HudTitle = "Ether's Wolf Park";
         public string HudTitleColor = "00FFFF";
+        public string HudChatColor = "87CEEB"; // sky blue, empty = the mod leaves server messages alone
         public int MeteorCooldownSeconds = 30;
         public string CoinMessage = "+%earned% (you have %coins%). A meteor costs %cost%, type !meteor when you have enough.";
         public string CoinsBalance = "You have %coins%. A meteor costs %cost%, feed the wolves with !feed to earn more.";
@@ -480,11 +481,12 @@ public class Feed : CovePlugin
                 publishedShop = shop + "|" + gamble + "|" + feedCooldown;
             }
 
-            string title = s.HudTitle + "|" + s.HudTitleColor;
+            string title = s.HudTitle + "|" + s.HudTitleColor + "|" + s.HudChatColor;
             if (title != publishedTitle)
             {
                 SteamMatchmaking.SetLobbyData(lobby, "wp_title", s.HudTitle);
                 SteamMatchmaking.SetLobbyData(lobby, "wp_title_color", s.HudTitleColor);
+                SteamMatchmaking.SetLobbyData(lobby, "wp_chat_color", s.HudChatColor); // what colour the mod gives server messages
                 publishedTitle = title;
             }
 
@@ -536,6 +538,7 @@ public class Feed : CovePlugin
                 SteamMatchmaking.SetLobbyData(lobby, "wp_feed_cd", "");
                 SteamMatchmaking.SetLobbyData(lobby, "wp_title", "");
                 SteamMatchmaking.SetLobbyData(lobby, "wp_title_color", "");
+                SteamMatchmaking.SetLobbyData(lobby, "wp_chat_color", "");
                 foreach (ulong id in published.Keys)
                     SteamMatchmaking.SetLobbyData(lobby, "wp_p" + id, "");
             }
@@ -892,6 +895,15 @@ public class Feed : CovePlugin
                     else
                         Log("hudTitleColor must be six hex digits like 00FFFF, using 00FFFF.");
                     break;
+                case "hudchatcolor":
+                    string chatHex = value.TrimStart('#');
+                    if (chatHex.Length == 0)
+                        next.HudChatColor = "";
+                    else if (chatHex.Length == 6 && chatHex.All(Uri.IsHexDigit))
+                        next.HudChatColor = chatHex.ToUpperInvariant();
+                    else
+                        Log("hudChatColor must be six hex digits like 87CEEB, or empty for none, using 87CEEB.");
+                    break;
                 case "meteorcost":
                     if (int.TryParse(value, out int cost) && cost >= 1)
                         next.MeteorCost = Math.Min(cost, 100_000);
@@ -1176,6 +1188,8 @@ public class Feed : CovePlugin
             "#  gambleResult / gambleAnnounce / gambleUsage / gambleNotEnough / gambleWait = wording.",
             "#  hudTitle             = the heading on the Wolfpark HUD mod's panel (up to 40 letters).",
             "#  hudTitleColor        = its colour as six hex digits, like 00FFFF.",
+            "#  hudChatColor         = the colour the mod shows server messages in, sky blue by default",
+            "#                         (87CEEB). Leave it empty to keep them the normal colour.",
             "#  In the coin messages you can also use  %coins% (balance, like \"3 coins\"),",
             "#  %earned% (coins from this feed) and %cost% (the meteor price). Leave a message",
             "#  empty to send nothing.",
@@ -1204,6 +1218,7 @@ public class Feed : CovePlugin
             "gambleAnnounce = %player% hit the JACKPOT and won %won%!",
             "hudTitle = Ether's Wolf Park",
             "hudTitleColor = 00FFFF",
+            "hudChatColor = 87CEEB",
             "coinMessage = +%earned% (you have %coins%). A meteor costs %cost%, type !meteor when you have enough.",
             "coinsBalance = You have %coins%. A meteor costs %cost%, feed the wolves with !feed to earn more.",
             "",
