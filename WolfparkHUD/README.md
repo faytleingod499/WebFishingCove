@@ -3,6 +3,8 @@
 A client mod (for [GDWeave](https://thunderstore.io/c/webfishing/p/NotNet/GDWeave/)) that adds a small panel with
 your wolf coin balance and **Feed Wolves** / **Meteor** buttons.
 
+On such a server anything you type that starts with `!` is sent to the server only and does not show in chat, and the buttons do the same. The heading (default "Ether's Wolf Park", cyan) comes from `hudTitle` / `hudTitleColor` in `feed.txt`.
+
 It only appears on servers that run the Cove `Feed` plugin from this repository (the plugin marks the server through
 the Steam lobby data). On every other server the mod stays hidden and does nothing.
 

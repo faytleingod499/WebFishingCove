@@ -42,6 +42,8 @@ public class Feed : CovePlugin
         // coins
         public int CoinsPerFeed = 1;
         public int MeteorCost = 10;
+        public string HudTitle = "Ether's Wolf Park";
+        public string HudTitleColor = "00FFFF";
         public int MeteorCooldownSeconds = 30;
         public string CoinMessage = "+%earned% (you have %coins%). A meteor costs %cost%, type !meteor when you have enough.";
         public string CoinsBalance = "You have %coins%. A meteor costs %cost%, feed the wolves with !feed to earn more.";
@@ -76,6 +78,7 @@ public class Feed : CovePlugin
     private long nextPublishTick;
     private ulong publishedLobby;
     private string publishedCost = "";
+    private string publishedTitle = "";
     private readonly Dictionary<ulong, string> published = new();
 
     public Feed(CoveServer server) : base(server) { }
@@ -362,6 +365,7 @@ public class Feed : CovePlugin
                 // a new lobby, so nothing has been written to it yet
                 published.Clear();
                 publishedCost = "";
+                publishedTitle = "";
                 SteamMatchmaking.SetLobbyData(lobby, "wp_hud", "1");
                 publishedLobby = lobby.m_SteamID;
             }
@@ -371,6 +375,14 @@ public class Feed : CovePlugin
             {
                 SteamMatchmaking.SetLobbyData(lobby, "wp_meteor_cost", cost);
                 publishedCost = cost;
+            }
+
+            string title = s.HudTitle + "|" + s.HudTitleColor;
+            if (title != publishedTitle)
+            {
+                SteamMatchmaking.SetLobbyData(lobby, "wp_title", s.HudTitle);
+                SteamMatchmaking.SetLobbyData(lobby, "wp_title_color", s.HudTitleColor);
+                publishedTitle = title;
             }
 
             var wanted = new Dictionary<ulong, string>();
@@ -413,6 +425,8 @@ public class Feed : CovePlugin
             {
                 SteamMatchmaking.SetLobbyData(lobby, "wp_hud", "");
                 SteamMatchmaking.SetLobbyData(lobby, "wp_meteor_cost", "");
+                SteamMatchmaking.SetLobbyData(lobby, "wp_title", "");
+                SteamMatchmaking.SetLobbyData(lobby, "wp_title_color", "");
                 foreach (ulong id in published.Keys)
                     SteamMatchmaking.SetLobbyData(lobby, "wp_p" + id, "");
             }
@@ -424,6 +438,7 @@ public class Feed : CovePlugin
         published.Clear();
         publishedLobby = 0;
         publishedCost = "";
+        publishedTitle = "";
     }
 
     private void ShowCoins(WFPlayer player)
@@ -578,6 +593,16 @@ public class Feed : CovePlugin
                     else
                         Log("coinsPerFeed must be a number, 0 or more, using 1.");
                     break;
+                case "hudtitle":
+                    next.HudTitle = value.Length > 40 ? value.Substring(0, 40) : value;
+                    break;
+                case "hudtitlecolor":
+                    string hex = value.TrimStart('#');
+                    if (hex.Length == 6 && hex.All(Uri.IsHexDigit))
+                        next.HudTitleColor = hex.ToUpperInvariant();
+                    else
+                        Log("hudTitleColor must be six hex digits like 00FFFF, using 00FFFF.");
+                    break;
                 case "meteorcost":
                     if (int.TryParse(value, out int cost) && cost >= 1)
                         next.MeteorCost = Math.Min(cost, 100_000);
@@ -672,6 +697,8 @@ public class Feed : CovePlugin
             "#  meteorCost           = coins a meteor costs.",
             "#  meteorCooldown       = seconds between meteors for the whole server, 0 for none.",
             "#                         Admins are not limited.",
+            "#  hudTitle             = the heading on the Wolfpark HUD mod's panel (up to 40 letters).",
+            "#  hudTitleColor        = its colour as six hex digits, like 00FFFF.",
             "#  In the coin messages you can also use  %coins% (balance, like \"3 coins\"),",
             "#  %earned% (coins from this feed), %cost% (the meteor price) and %seconds%",
             "#  (time left to wait). Leave a message empty to send nothing.",
@@ -693,6 +720,8 @@ public class Feed : CovePlugin
             "coinsPerFeed = 1",
             "meteorCost = 10",
             "meteorCooldown = 30",
+            "hudTitle = Ether's Wolf Park",
+            "hudTitleColor = 00FFFF",
             "coinMessage = +%earned% (you have %coins%). A meteor costs %cost%, type !meteor when you have enough.",
             "coinsBalance = You have %coins%. A meteor costs %cost%, feed the wolves with !feed to earn more.",
             "meteorMessage = %player% spent %cost% to call down a meteor!",
