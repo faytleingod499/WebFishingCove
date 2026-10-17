@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Cove.GodotFormat;
 using Cove.Server;
 using Cove.Server.Actor;
@@ -8,13 +9,16 @@ using Cove.Server.Plugins;
 
 /// <summary>
 /// Lets players save a chalk canvas under a name and put it back on any canvas later.
+/// Every player has their own folder of saves, so a list only shows their own and names never clash.
 ///
 ///   !chalksave &lt;name&gt; &lt;0-3&gt;     saves that canvas
-///   !chalkload &lt;name&gt; &lt;0-3&gt;     replaces that canvas with a saved one
-///   !chalklist                  lists the saved canvases
-///   !chalkdelete &lt;name&gt;         deletes a save (its owner, or an admin)
+///   !chalkload &lt;name&gt; &lt;0-3&gt;     replaces that canvas with one of your saves
+///   !chalklist                  lists your saves
+///   !chalkdelete &lt;name&gt;         deletes one of your saves
 ///
-/// Saves are files in the ChalkSaves folder next to the server. Before a canvas is replaced, what was on it
+/// Admins can add a player (name or Steam ID) to the end of any of these to use that player's saves.
+///
+/// Saves are files in ChalkSaves/&lt;Steam ID&gt;/ next to the server. Before a canvas is replaced, what was on it
 /// is kept in ChalkSaves/_backups so a load can be undone by hand. Settings are in chalksaves.txt.
 /// </summary>
 public class ChalkSaves : CovePlugin
@@ -26,6 +30,7 @@ public class ChalkSaves : CovePlugin
     private const int CanvasCount = 4;
     private const int MaxNameLength = 32;
     private const int MaxBackups = 20;
+    private const int MaxSavesDefault = 20;
     private const int MaxListed = 30;
 
     // same limits the server uses, a hand edited or damaged file can't flood the server
@@ -46,7 +51,7 @@ public class ChalkSaves : CovePlugin
     // settings
     private bool saveAdminsOnly;
     private bool loadAdminsOnly;
-    private int maxSaves = 100;
+    private int maxSaves = MaxSavesDefault; // per player
     private int loadCooldownSeconds = 30;
 
     private string folder = "";
@@ -73,6 +78,7 @@ public class ChalkSaves : CovePlugin
             Directory.CreateDirectory(backupFolder);
             EnsureSettingsFileExists();
             ReadSettings();
+            MoveOldSaves();
         }
         catch (Exception e)
         {
@@ -90,6 +96,28 @@ public class ChalkSaves : CovePlugin
         base.onEnd();
         foreach (string command in new[] { "chalksave", "chalkload", "chalklist", "chalkdelete" })
             ParentServer.UnregisterCommand(command);
+    }
+
+    // saves from the first version of this plugin sat directly in ChalkSaves, move them into their owner's folder
+    private void MoveOldSaves()
+    {
+        int moved = 0;
+        foreach (string file in Directory.GetFiles(folder, "*.json"))
+        {
+            SaveFile? save = Read(file);
+            if (save == null || save.Owner == 0)
+                continue; // leave anything we can't place where it is
+
+            string target = Path.Combine(FolderFor(save.Owner), Path.GetFileName(file));
+            if (File.Exists(target))
+                continue;
+
+            Directory.CreateDirectory(FolderFor(save.Owner));
+            File.Move(file, target);
+            moved++;
+        }
+        if (moved > 0)
+            Log($"Moved {moved} older save(s) into their owner's folder.");
     }
 
     private void Register(string command, string description, Action<WFPlayer, string[]> run)
@@ -115,6 +143,44 @@ public class ChalkSaves : CovePlugin
 
     // ---- commands ----
 
+    // Works out whose saves a command uses. Normally the player's own. An admin can add a player (name or Steam ID)
+    // after the normal arguments to use that player's saves.
+    private bool TryTarget(WFPlayer player, string[] args, int normalArgs, out ulong target, out string targetName)
+    {
+        target = player.SteamId.m_SteamID;
+        targetName = player.Username;
+
+        if (args.Length == normalArgs)
+            return true;
+        if (args.Length != normalArgs + 1)
+            return false;
+
+        if (!IsPlayerAdmin(player))
+            return false;
+
+        string ident = args[normalArgs].Trim();
+        if (Regex.IsMatch(ident, @"^\d{17}$") && ulong.TryParse(ident, out ulong steamId))
+        {
+            target = steamId;
+            targetName = ident;
+            return true;
+        }
+
+        WFPlayer? found = ParentServer.GetPlayer(ident);
+        if (found == null)
+        {
+            SendPlayerChatMessage(player, $"No player called \"{ident}\" is online. Use their Steam ID instead.");
+            targetName = "";
+            return true; // already answered, the caller checks targetName
+        }
+
+        target = found.SteamId.m_SteamID;
+        targetName = found.Username;
+        return true;
+    }
+
+    private static string Of(WFPlayer player, string targetName) => targetName == player.Username ? "" : $" for {targetName}";
+
     private void SaveCanvas(WFPlayer player, string[] args)
     {
         if (saveAdminsOnly && !IsPlayerAdmin(player))
@@ -122,11 +188,14 @@ public class ChalkSaves : CovePlugin
             SendPlayerChatMessage(player, "Only admins can save canvases.");
             return;
         }
-        if (args.Length != 2 || !TryName(args[0], out string name) || !TryCanvas(args[1], out int canvasId))
+        if (args.Length < 2 || !TryName(args[0], out string name) || !TryCanvas(args[1], out int canvasId)
+            || !TryTarget(player, args, 2, out ulong owner, out string ownerName))
         {
             SendPlayerChatMessage(player, "Usage: !chalksave <name> <0-3>. Names can use letters, numbers, - and _.");
             return;
         }
+        if (ownerName.Length == 0)
+            return;
 
         List<Cell> cells = Snapshot(canvasId);
         if (cells.Count == 0)
@@ -137,34 +206,27 @@ public class ChalkSaves : CovePlugin
 
         lock (fileLock)
         {
-            string path = PathFor(name);
+            string dir = FolderFor(owner);
+            Directory.CreateDirectory(dir);
+            string path = Path.Combine(dir, name + ".json");
             bool exists = File.Exists(path);
 
-            if (exists)
+            if (!exists && Directory.GetFiles(dir, "*.json").Length >= maxSaves)
             {
-                SaveFile? old = Read(path);
-                if (old != null && old.Owner != player.SteamId.m_SteamID && !IsPlayerAdmin(player))
-                {
-                    SendPlayerChatMessage(player, $"\"{name}\" was saved by {old.OwnerName}, pick another name.");
-                    return;
-                }
-            }
-            else if (Directory.GetFiles(folder, "*.json").Length >= maxSaves)
-            {
-                SendPlayerChatMessage(player, $"There are already {maxSaves} saves, delete one first.");
+                SendPlayerChatMessage(player, $"That is already {maxSaves} saves, delete one first with !chalkdelete <name>.");
                 return;
             }
 
             WriteSave(path, new SaveFile
             {
-                Owner = player.SteamId.m_SteamID,
-                OwnerName = player.Username,
+                Owner = owner,
+                OwnerName = ownerName,
                 Saved = DateTime.UtcNow.ToString("o"),
                 Cells = cells,
             });
 
-            Log($"{player.Username} saved canvas {canvasId} as \"{name}\" ({cells.Count} cells){(exists ? ", replacing the old save" : "")}.");
-            SendPlayerChatMessage(player, $"Saved canvas {canvasId} as \"{name}\"{(exists ? " (replaced the old save)" : "")}.");
+            Log($"{player.Username} saved canvas {canvasId} as \"{name}\"{Of(player, ownerName)} ({cells.Count} cells){(exists ? ", replacing the old save" : "")}.");
+            SendPlayerChatMessage(player, $"Saved canvas {canvasId} as \"{name}\"{Of(player, ownerName)}{(exists ? " (replaced the old save)" : "")}.");
         }
     }
 
@@ -176,11 +238,14 @@ public class ChalkSaves : CovePlugin
             SendPlayerChatMessage(player, "Only admins can load canvases.");
             return;
         }
-        if (args.Length != 2 || !TryName(args[0], out string name) || !TryCanvas(args[1], out int canvasId))
+        if (args.Length < 2 || !TryName(args[0], out string name) || !TryCanvas(args[1], out int canvasId)
+            || !TryTarget(player, args, 2, out ulong owner, out string ownerName))
         {
             SendPlayerChatMessage(player, "Usage: !chalkload <name> <0-3>");
             return;
         }
+        if (ownerName.Length == 0)
+            return;
 
         ulong id = player.SteamId.m_SteamID;
         long now = Environment.TickCount64;
@@ -194,14 +259,18 @@ public class ChalkSaves : CovePlugin
             }
         }
 
-        string path = PathFor(name);
+        string path = Path.Combine(FolderFor(owner), name + ".json");
         SaveFile? save;
+        bool exists;
         lock (fileLock)
-            save = File.Exists(path) ? Read(path) : null;
+        {
+            exists = File.Exists(path);
+            save = exists ? Read(path) : null;
+        }
 
         if (save == null)
         {
-            SendPlayerChatMessage(player, File.Exists(path) ? $"\"{name}\" could not be read." : $"There is no save called \"{name}\". Try !chalklist.");
+            SendPlayerChatMessage(player, exists ? $"\"{name}\" could not be read." : $"You have no save called \"{name}\". Try !chalklist.");
             return;
         }
 
@@ -213,6 +282,7 @@ public class ChalkSaves : CovePlugin
         {
             lock (fileLock)
             {
+                Directory.CreateDirectory(backupFolder);
                 WriteSave(Path.Combine(backupFolder, $"canvas{canvasId}-{DateTime.Now:yyyyMMdd-HHmmss}-{player.SteamId.m_SteamID}.json"), new SaveFile
                 {
                     Owner = player.SteamId.m_SteamID,
@@ -245,55 +315,62 @@ public class ChalkSaves : CovePlugin
         lock (fileLock)
             lastLoad[id] = now;
 
-        Log($"{player.Username} loaded \"{name}\" ({save.Cells.Count} cells) onto canvas {canvasId}, replacing {before.Count} cells.");
-        SendPlayerChatMessage(player, $"Loaded \"{name}\" onto canvas {canvasId}.");
+        Log($"{player.Username} loaded \"{name}\"{Of(player, ownerName)} ({save.Cells.Count} cells) onto canvas {canvasId}, replacing {before.Count} cells.");
+        SendPlayerChatMessage(player, $"Loaded \"{name}\"{Of(player, ownerName)} onto canvas {canvasId}.");
     }
 
     private void ListSaves(WFPlayer player, string[] args)
     {
+        if (!TryTarget(player, args, 0, out ulong owner, out string ownerName))
+        {
+            SendPlayerChatMessage(player, "Usage: !chalklist");
+            return;
+        }
+        if (ownerName.Length == 0)
+            return;
+
         string[] files;
         lock (fileLock)
-            files = Directory.GetFiles(folder, "*.json");
+        {
+            string dir = FolderFor(owner);
+            files = Directory.Exists(dir) ? Directory.GetFiles(dir, "*.json") : Array.Empty<string>();
+        }
 
+        string whose = Of(player, ownerName).Length == 0 ? "You have" : $"{ownerName} has";
         if (files.Length == 0)
         {
-            SendPlayerChatMessage(player, "No canvases have been saved yet. Use !chalksave <name> <0-3>.");
+            SendPlayerChatMessage(player, $"{whose} no saved canvases. Use !chalksave <name> <0-3>.");
             return;
         }
 
         var names = files.Select(f => Path.GetFileNameWithoutExtension(f)).OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToList();
         string shown = string.Join(", ", names.Take(MaxListed));
         string more = names.Count > MaxListed ? $" and {names.Count - MaxListed} more" : "";
-        SendPlayerChatMessage(player, $"Saved canvases ({names.Count}): {shown}{more}");
+        SendPlayerChatMessage(player, $"{whose} {names.Count} saved canvas(es): {shown}{more}");
     }
 
     private void DeleteSave(WFPlayer player, string[] args)
     {
-        if (args.Length != 1 || !TryName(args[0], out string name))
+        if (args.Length < 1 || !TryName(args[0], out string name) || !TryTarget(player, args, 1, out ulong owner, out string ownerName))
         {
             SendPlayerChatMessage(player, "Usage: !chalkdelete <name>");
             return;
         }
+        if (ownerName.Length == 0)
+            return;
 
         lock (fileLock)
         {
-            string path = PathFor(name);
+            string path = Path.Combine(FolderFor(owner), name + ".json");
             if (!File.Exists(path))
             {
-                SendPlayerChatMessage(player, $"There is no save called \"{name}\".");
-                return;
-            }
-
-            SaveFile? save = Read(path);
-            if (save != null && save.Owner != player.SteamId.m_SteamID && !IsPlayerAdmin(player))
-            {
-                SendPlayerChatMessage(player, $"\"{name}\" was saved by {save.OwnerName}, only they or an admin can delete it.");
+                SendPlayerChatMessage(player, $"There is no save called \"{name}\"{Of(player, ownerName)}.");
                 return;
             }
 
             File.Delete(path);
-            Log($"{player.Username} deleted the save \"{name}\".");
-            SendPlayerChatMessage(player, $"Deleted \"{name}\".");
+            Log($"{player.Username} deleted the save \"{name}\"{Of(player, ownerName)}.");
+            SendPlayerChatMessage(player, $"Deleted \"{name}\"{Of(player, ownerName)}.");
         }
     }
 
@@ -343,7 +420,8 @@ public class ChalkSaves : CovePlugin
 
     // ---- files ----
 
-    private string PathFor(string name) => Path.Combine(folder, name + ".json");
+    // one folder per player, named by Steam ID
+    private string FolderFor(ulong owner) => Path.Combine(folder, owner.ToString());
 
     private void WriteSave(string path, SaveFile save)
     {
@@ -464,9 +542,9 @@ public class ChalkSaves : CovePlugin
                 case "loadaccess":
                     loadAdminsOnly = value.Equals("admins", StringComparison.OrdinalIgnoreCase);
                     break;
-                case "maxsaves":
+                case "maxsavesperplayer":
                     if (int.TryParse(value, out int saves) && saves > 0)
-                        maxSaves = Math.Min(saves, 10_000);
+                        maxSaves = Math.Min(saves, 1000);
                     break;
                 case "loadcooldown":
                     if (int.TryParse(value, out int cooldown) && cooldown >= 0)
@@ -490,13 +568,19 @@ public class ChalkSaves : CovePlugin
             "#  Players save a chalk canvas under a name and put it back later:",
             "#    !chalksave <name> <0-3>     saves that canvas",
             "#    !chalkload <name> <0-3>     replaces that canvas with a save",
-            "#    !chalklist                  lists the saves",
-            "#    !chalkdelete <name>         deletes a save (its owner or an admin)",
+            "#    !chalklist                  lists your saves",
+            "#    !chalkdelete <name>         deletes one of your saves",
             "#",
-            "#  Saves are files in the ChalkSaves folder next to the server. Before a",
+            "#  Every player has their own folder of saves, so they only see their own",
+            "#  and two players can use the same name. Admins can add a player's name",
+            "#  (while online) or Steam ID to the end of any of these to use that",
+            "#  player's saves, like  !chalklist 76561190000000000",
+            "#",
+            "#  Saves are files in ChalkSaves/<Steam ID> next to the server. Before a",
             "#  canvas is replaced, what was on it is kept in ChalkSaves/_backups",
-            "#  (the newest 20). To undo a load, copy that file up into ChalkSaves,",
-            "#  rename it to something like  undo.json  and load it.",
+            "#  (the newest 20). To undo a load, copy that file into your own folder",
+            "#  under ChalkSaves/<Steam ID>, rename it to something like undo.json",
+            "#  and load it.",
             "#",
             "#  Changes here are read when the plugin starts, use !reloadplugins chalksaves",
             "#  after editing.",
@@ -504,14 +588,14 @@ public class ChalkSaves : CovePlugin
             "#  saveAccess    = everyone or admins. Who can save and replace their own saves.",
             "#  loadAccess    = everyone or admins. Who can put a save on a canvas.",
             "#                  Loading wipes whatever is drawn there, so admins may be safer.",
-            "#  maxSaves      = how many saves can exist, default 100.",
+            "#  maxSavesPerPlayer = how many saves each player can keep, default 20.",
             "#  loadCooldown  = seconds a player must wait between loads, default 30.",
             "#                  Admins are not limited.",
             "# ======================================================================",
             "",
             "saveAccess = everyone",
             "loadAccess = everyone",
-            "maxSaves = 100",
+            "maxSavesPerPlayer = 20",
             "loadCooldown = 30",
             "",
         };
