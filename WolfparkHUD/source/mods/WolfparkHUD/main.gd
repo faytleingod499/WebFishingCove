@@ -19,6 +19,7 @@ var layer
 var panel
 var grip
 var coin_label
+var feeds_label
 var feed_button
 var feed_bar
 var buy_button
@@ -98,29 +99,13 @@ func _build_ui():
 	column.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	margin.add_child(column)
 
-	var title_row = HBoxContainer.new()
-	title_row.add_constant_override("separation", 6)
-	title_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	column.add_child(title_row)
-
 	title_label = Label.new()
 	title_label.align = Label.ALIGN_CENTER
 	title_label.visible = false
-	title_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	title_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	title_row.add_child(title_label)
+	column.add_child(title_label)
 
-	# the leaderboard icon: a little clipboard that runs !wolves
-	board_button = Button.new()
-	board_button.focus_mode = Control.FOCUS_NONE
-	board_button.hint_tooltip = "Leaderboard"
-	board_button.rect_min_size = Vector2(26, 22)
-	board_button.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	board_button.connect("pressed", self, "_on_board")
-	board_button.connect("draw", self, "_draw_clipboard")
-	_glass_button(board_button)
-	title_row.add_child(board_button)
-
+	# top: the drag grip, the coins and the times fed
 	var row = HBoxContainer.new()
 	row.add_constant_override("separation", 10)
 	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -140,6 +125,29 @@ func _build_ui():
 	coin_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	row.add_child(coin_label)
 
+	feeds_label = Label.new()
+	feeds_label.text = "Fed: 0"
+	feeds_label.add_color_override("font_color", Color(0.75, 0.95, 1.0))
+	feeds_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.add_child(feeds_label)
+
+	# middle: leaderboard, feed and buy
+	var button_row = HBoxContainer.new()
+	button_row.add_constant_override("separation", 8)
+	button_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	column.add_child(button_row)
+
+	# the leaderboard icon: a little clipboard that runs !wolves
+	board_button = Button.new()
+	board_button.focus_mode = Control.FOCUS_NONE
+	board_button.hint_tooltip = "Leaderboard"
+	board_button.rect_min_size = Vector2(26, 22)
+	board_button.connect("pressed", self, "_on_board")
+	board_button.connect("draw", self, "_draw_clipboard")
+	_glass_button(board_button)
+	button_row.add_child(board_button)
+
+
 	feed_button = Button.new()
 	feed_button.text = "Feed Wolves"
 	feed_button.focus_mode = Control.FOCUS_NONE
@@ -147,7 +155,7 @@ func _build_ui():
 	_glass_button(feed_button)
 	# while the wolves are full the button is clearly grey, the colour then comes back from left to right
 	feed_button.add_stylebox_override("disabled", _glass(Color(0.45, 0.45, 0.45, 0.30), Color(0.7, 0.7, 0.7, 0.3), 8, 0))
-	row.add_child(feed_button)
+	button_row.add_child(feed_button)
 
 	# the cooldown bar: the button's colour, sliding back in behind the text as the cooldown runs down
 	feed_bar = ColorRect.new()
@@ -162,7 +170,7 @@ func _build_ui():
 	buy_button.focus_mode = Control.FOCUS_NONE
 	buy_button.connect("pressed", self, "_on_buy_toggle")
 	_glass_button(buy_button)
-	row.add_child(buy_button)
+	button_row.add_child(buy_button)
 
 	# the gamble row
 	var gamble_row = HBoxContainer.new()
@@ -182,14 +190,13 @@ func _build_ui():
 	bet_field.connect("focus_entered", self, "_on_bet_focus")
 	bet_field.connect("focus_exited", self, "_on_bet_unfocus")
 	bet_field.connect("text_entered", self, "_on_bet_entered")
-	gamble_row.add_child(bet_field)
-
 	gamble_button = Button.new()
 	gamble_button.text = "Gamble"
 	gamble_button.focus_mode = Control.FOCUS_NONE
 	gamble_button.connect("pressed", self, "_on_gamble")
 	_glass_button(gamble_button)
 	gamble_row.add_child(gamble_button)
+	gamble_row.add_child(bet_field)
 
 	result_label = Label.new()
 	result_label.text = ""
@@ -467,6 +474,7 @@ func _refresh():
 	title_label.text = title_text
 	title_label.add_color_override("font_color", title_color)
 	coin_label.text = "Coins: " + str(coins)
+	feeds_label.text = "Fed: " + str(feeds)
 	feed_button.disabled = now < feed_ready_at or now < feed_bar_end
 	if now < feed_bar_end and feed_bar_end > feed_bar_start:
 		var progress = clamp(float(now - feed_bar_start) / float(feed_bar_end - feed_bar_start), 0.0, 1.0)
