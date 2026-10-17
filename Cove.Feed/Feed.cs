@@ -13,7 +13,7 @@ using Steamworks;
 ///   !feed     feed the wolves, which also earns coins
 ///   !coins    shows how many coins you have
 ///   !meteor   spends coins to call down a meteor
-///   !shop     lists everything coins can buy, !buy <name> buys it
+///   !shop     lists everything coins can buy (set in shop.txt), !buy <name> buys it
 ///   !gamble   bets coins on a wolf roll, !gamble <coins>
 ///   !wolves   shows the top feeders and the server total
 ///
@@ -27,6 +27,7 @@ public class Feed : CovePlugin
 {
     private const string CountsFileName = "feed-counts.json";
     private const string SettingsFileName = "feed.txt";
+    private const string ShopFileName = "shop.txt";
     private const long ReloadCheckMs = 10_000;
     private const int MaxReplies = 20;
 
@@ -44,8 +45,10 @@ public class Feed : CovePlugin
 
         // coins
         public int CoinsPerFeed = 1;
-        public List<ShopItem> Extras = new()
+        // read from shop.txt
+        public List<ShopItem> Items = new()
         {
+            new ShopItem { Id = "meteor", Label = "Meteor", Price = 10, Action = "meteor", CooldownSeconds = 30, Message = "%player% spent %cost% to call down a meteor!" },
             new ShopItem { Id = "raincloud", Label = "Rain Cloud", Price = 6, Action = "raincloud", CooldownSeconds = 30 },
             new ShopItem { Id = "fish", Label = "Fish Shadow", Price = 3, Action = "fish", CooldownSeconds = 10 },
         };
@@ -89,6 +92,7 @@ public class Feed : CovePlugin
         public int Price;
         public string Action = "";
         public int CooldownSeconds;
+        public string? Message; // null = the buyMessage of shop.txt, empty = say nothing
     }
 
     private sealed class Outcome
@@ -108,13 +112,14 @@ public class Feed : CovePlugin
     private readonly object sync = new();
     private readonly Dictionary<ulong, Record> counts = new();
     private readonly Dictionary<ulong, long> lastFed = new();
-    private long lastMeteorTick = long.MinValue / 2;
     private readonly Dictionary<string, long> lastBought = new();
     private readonly Dictionary<ulong, long> lastGamble = new();
     private readonly Dictionary<ulong, (int Seq, double Mult, int Net)> gambleResults = new();
     private readonly Dictionary<ulong, long> hungryAt = new(); // when to tell a player the wolves are hungry again
     private string countsPath = "";
     private string settingsPath = "";
+    private string shopPath = "";
+    private DateTime loadedShopWriteTime = DateTime.MinValue;
     private Settings settings = new();
     private DateTime loadedWriteTime = DateTime.MinValue;
     private long nextReloadCheckTick;
@@ -138,6 +143,7 @@ public class Feed : CovePlugin
         string root = AppDomain.CurrentDomain.BaseDirectory;
         countsPath = Path.Combine(root, CountsFileName);
         settingsPath = Path.Combine(root, SettingsFileName);
+        shopPath = Path.Combine(root, ShopFileName);
         LoadCounts();
 
         lock (sync)
@@ -213,7 +219,7 @@ public class Feed : CovePlugin
             {
                 try
                 {
-                    BuyMeteor(player);
+                    BuyItem(player, "meteor");
                 }
                 catch (Exception e)
                 {
@@ -312,7 +318,8 @@ public class Feed : CovePlugin
                 nextReloadCheckTick = now + ReloadCheckMs;
                 try
                 {
-                    if (File.Exists(settingsPath) && File.GetLastWriteTimeUtc(settingsPath) != loadedWriteTime)
+                    if ((File.Exists(settingsPath) && File.GetLastWriteTimeUtc(settingsPath) != loadedWriteTime)
+                        || (File.Exists(shopPath) && File.GetLastWriteTimeUtc(shopPath) != loadedShopWriteTime))
                     {
                         ReloadSettings();
                         s = settings;
@@ -321,6 +328,7 @@ public class Feed : CovePlugin
                 catch (Exception e)
                 {
                     loadedWriteTime = DateTime.MinValue; // probably mid-save, try again at the next check
+                    loadedShopWriteTime = DateTime.MinValue;
                     Log($"Could not reload {SettingsFileName}: {e.Message}");
                 }
             }
@@ -385,7 +393,7 @@ public class Feed : CovePlugin
         return text.Replace("%player%", player)
                    .Replace("%coins%", Coins(balance))
                    .Replace("%earned%", Coins(earned))
-                   .Replace("%cost%", Coins(s.MeteorCost))
+                   .Replace("%cost%", Coins((s.Items.FirstOrDefault(i => i.Action == "meteor") ?? s.Items.FirstOrDefault())?.Price ?? s.MeteorCost))
                    .Replace("%seconds%", seconds.ToString());
     }
 
@@ -544,16 +552,7 @@ public class Feed : CovePlugin
 
     private static string Clean(string text) => text.Replace('~', ' ').Replace(';', ' ').Replace(',', ' ').Replace('|', ' ');
 
-    // the meteor first, then the items from feed.txt
-    private static List<ShopItem> ShopList(Settings s)
-    {
-        var list = new List<ShopItem>
-        {
-            new ShopItem { Id = "meteor", Label = "Meteor", Price = s.MeteorCost, Action = "meteor", CooldownSeconds = s.MeteorCooldownSeconds },
-        };
-        list.AddRange(s.Extras);
-        return list;
-    }
+    private static List<ShopItem> ShopList(Settings s) => s.Items;
 
     private void ShowShop(WFPlayer player)
     {
@@ -575,6 +574,7 @@ public class Feed : CovePlugin
     {
         switch (action)
         {
+            case "meteor": ParentServer.spawnFish("fish_spawn_alien"); break;
             case "fish": ParentServer.spawnFish(); break;
             case "raincloud": ParentServer.spawnRainCloud(); break;
             case "voidportal": ParentServer.spawnVoidPortal(); break;
@@ -585,14 +585,9 @@ public class Feed : CovePlugin
     private void BuyItem(WFPlayer player, string id)
     {
         id = id.Trim().ToLowerInvariant();
-        if (id == "meteor")
-        {
-            BuyMeteor(player);
-            return;
-        }
 
         Settings s = GetSettings();
-        ShopItem? item = s.Extras.FirstOrDefault(i => i.Id == id);
+        ShopItem? item = s.Items.FirstOrDefault(i => i.Id == id);
         if (item == null)
         {
             SendPlayerChatMessage(player, $"There is no \"{id}\" in the shop. Type !shop to see what you can buy.");
@@ -650,8 +645,9 @@ public class Feed : CovePlugin
         }
 
         Log($"{player.Username} spent {item.Price} coins on {item.Id}.");
-        if (s.BuyMessage.Length > 0)
-            SendGlobalChatMessage(FillItem(s.BuyMessage, player.Username, item, coins));
+        string announce = item.Message ?? s.BuyMessage;
+        if (announce.Length > 0)
+            SendGlobalChatMessage(FillItem(announce, player.Username, item, coins));
     }
 
     private string FillGamble(string text, string player, int bet, int won, int net, int balance, string label, Settings s)
@@ -757,66 +753,6 @@ public class Feed : CovePlugin
         SendPlayerChatMessage(player, FillCoins(s.CoinsBalance, player.Username, coins, s));
     }
 
-    private void BuyMeteor(WFPlayer player)
-    {
-        Settings s = GetSettings();
-        ulong id = player.SteamId.m_SteamID;
-        int coins;
-
-        lock (sync)
-        {
-            long now = Environment.TickCount64;
-            bool admin = IsPlayerAdmin(player);
-
-            // one meteor at a time for the whole server, so a few players can't fill the sky
-            if (!admin && s.MeteorCooldownSeconds > 0 && now - lastMeteorTick < s.MeteorCooldownSeconds * 1000L)
-            {
-                int wait = (int)Math.Ceiling((s.MeteorCooldownSeconds * 1000L - (now - lastMeteorTick)) / 1000.0);
-                SendPlayerChatMessage(player, FillCoins(s.MeteorWaitMessage, player.Username, 0, s, 0, wait));
-                return;
-            }
-
-            counts.TryGetValue(id, out Record? record);
-            coins = record?.Coins ?? 0;
-            if (record == null || record.Coins < s.MeteorCost)
-            {
-                SendPlayerChatMessage(player, FillCoins(s.NotEnoughMessage, player.Username, coins, s));
-                return;
-            }
-
-            // charge first, and give the coins back if the meteor can't be spawned
-            record.Coins -= s.MeteorCost;
-            coins = record.Coins;
-            lastMeteorTick = now;
-            SaveCounts();
-        }
-
-        try
-        {
-            ParentServer.spawnFish("fish_spawn_alien");
-        }
-        catch (Exception e)
-        {
-            lock (sync)
-            {
-                if (counts.TryGetValue(id, out Record? record))
-                {
-                    record.Coins += s.MeteorCost;
-                    coins = record.Coins;
-                }
-                lastMeteorTick = long.MinValue / 2;
-                SaveCounts();
-            }
-            Log($"Could not spawn a meteor for {player.Username}: {e.Message}");
-            SendPlayerChatMessage(player, s.MeteorFailedMessage);
-            return;
-        }
-
-        Log($"{player.Username} spent {s.MeteorCost} coins on a meteor.");
-        if (s.MeteorMessage.Length > 0)
-            SendGlobalChatMessage(FillCoins(s.MeteorMessage, player.Username, coins, s));
-    }
-
     private void ShowTop(WFPlayer player)
     {
         List<Record> top;
@@ -855,8 +791,6 @@ public class Feed : CovePlugin
         var next = new Settings();
         var replies = new List<string>();
         bool anyReplyLine = false;
-        var shopItems = new List<ShopItem>();
-        bool anyShopLine = false;
         var outcomes = new List<Outcome>();
 
         foreach (string raw in File.ReadAllLines(settingsPath))
@@ -901,11 +835,6 @@ public class Feed : CovePlugin
                         next.CoinsPerFeed = Math.Min(perFeed, 1000);
                     else
                         Log("coinsPerFeed must be a number, 0 or more, using 1.");
-                    break;
-                case "shop":
-                    anyShopLine = true;
-                    if (shopItems.Count < 10 && TryParseShopItem(value, out ShopItem? parsedItem) && parsedItem != null)
-                        shopItems.Add(parsedItem);
                     break;
                 case "gambleoutcome":
                     if (outcomes.Count < 12 && TryParseOutcome(value, out Outcome? parsedOutcome) && parsedOutcome != null)
@@ -952,18 +881,6 @@ public class Feed : CovePlugin
                     break;
                 case "gamblewait":
                     next.GambleWait = value;
-                    break;
-                case "buymessage":
-                    next.BuyMessage = value;
-                    break;
-                case "buynotenough":
-                    next.BuyNotEnough = value;
-                    break;
-                case "buywait":
-                    next.BuyWait = value;
-                    break;
-                case "buyfailed":
-                    next.BuyFailed = value;
                     break;
                 case "hudtitle":
                     next.HudTitle = value.Length > 40 ? value.Substring(0, 40) : value;
@@ -1024,9 +941,6 @@ public class Feed : CovePlugin
         if (anyReplyLine)
             next.Replies = replies;
 
-        // shop lines replace the default extras (no valid line at all means the shop only has the meteor)
-        if (anyShopLine)
-            next.Extras = shopItems;
         if (outcomes.Count > 0 && outcomes.Sum(o => o.Chance) > 0)
         {
             next.Outcomes = outcomes;
@@ -1037,47 +951,164 @@ public class Feed : CovePlugin
         else if (outcomes.Count > 0)
             Log("The gambleOutcome lines have no chance above 0, using the default outcomes.");
 
+        ReloadShop(next);
+
         settings = next;
         Log($"Loaded {SettingsFileName}.");
     }
 
-    // shop = id | Label | price | action | cooldown seconds
+    // item = id | Label | price | action | cooldown seconds | message
     private bool TryParseShopItem(string value, out ShopItem? item)
     {
         item = null;
-        string[] parts = value.Split('|').Select(p => p.Trim()).ToArray();
+        string[] parts = value.Split('|', 6).Select(p => p.Trim()).ToArray();
         if (parts.Length < 4)
         {
-            Log($"shop line \"{value}\" needs: id | Label | price | action | cooldown");
+            Log($"shop item \"{value}\" needs: id | Label | price | action | cooldown | message");
             return false;
         }
 
         string id = parts[0].ToLowerInvariant();
-        if (id.Length == 0 || id == "meteor" || !id.All(c => char.IsAsciiLetterOrDigit(c) || c == '_'))
+        if (id.Length == 0 || !id.All(c => char.IsAsciiLetterOrDigit(c) || c == '_'))
         {
-            Log($"shop line \"{value}\": the id must be letters or numbers and cannot be meteor.");
+            Log($"shop item \"{value}\": the id must be letters or numbers.");
             return false;
         }
         if (!int.TryParse(parts[2], out int price) || price < 1)
         {
-            Log($"shop line \"{value}\": the price must be a number, 1 or more.");
+            Log($"shop item \"{value}\": the price must be a number, 1 or more.");
             return false;
         }
         string action = parts[3].ToLowerInvariant();
-        if (action != "fish" && action != "raincloud" && action != "voidportal")
+        if (action != "meteor" && action != "fish" && action != "raincloud" && action != "voidportal")
         {
-            Log($"shop line \"{value}\": the action must be fish, raincloud or voidportal.");
+            Log($"shop item \"{value}\": the action must be meteor, fish, raincloud or voidportal.");
             return false;
         }
         int cooldown = 0;
-        if (parts.Length > 4 && (!int.TryParse(parts[4], out cooldown) || cooldown < 0))
+        if (parts.Length > 4 && parts[4].Length > 0 && (!int.TryParse(parts[4], out cooldown) || cooldown < 0))
         {
-            Log($"shop line \"{value}\": the cooldown must be a number of seconds.");
+            Log($"shop item \"{value}\": the cooldown must be a number of seconds.");
             return false;
         }
 
-        item = new ShopItem { Id = id, Label = parts[1].Length > 0 ? parts[1] : id, Price = Math.Min(price, 100_000), Action = action, CooldownSeconds = Math.Min(cooldown, 86_400) };
+        item = new ShopItem
+        {
+            Id = id,
+            Label = parts[1].Length > 0 ? parts[1] : id,
+            Price = Math.Min(price, 100_000),
+            Action = action,
+            CooldownSeconds = Math.Min(cooldown, 86_400),
+            Message = parts.Length > 5 ? parts[5] : null,
+        };
         return true;
+    }
+
+    // ---- shop.txt ----
+
+    private void ReloadShop(Settings next)
+    {
+        try
+        {
+            if (!File.Exists(shopPath))
+                EnsureShopFileExists(next);
+
+            loadedShopWriteTime = File.GetLastWriteTimeUtc(shopPath);
+
+            var items = new List<ShopItem>();
+            foreach (string raw in File.ReadAllLines(shopPath))
+            {
+                string line = raw.Trim();
+                if (line.Length == 0 || line.StartsWith('#'))
+                    continue;
+                int separator = line.IndexOf('=');
+                if (separator <= 0)
+                    continue;
+
+                string key = line.Substring(0, separator).Trim().ToLowerInvariant();
+                string value = line.Substring(separator + 1).Trim();
+
+                switch (key)
+                {
+                    case "item":
+                        if (items.Count >= 20)
+                            Log("shop.txt: only the first 20 items are used.");
+                        else if (TryParseShopItem(value, out ShopItem? parsed) && parsed != null)
+                        {
+                            if (items.Any(i => i.Id == parsed.Id))
+                                Log($"shop.txt: \"{parsed.Id}\" is listed twice, the second one is ignored.");
+                            else
+                                items.Add(parsed);
+                        }
+                        break;
+                    case "buymessage":
+                        next.BuyMessage = value;
+                        break;
+                    case "buynotenough":
+                        next.BuyNotEnough = value;
+                        break;
+                    case "buywait":
+                        next.BuyWait = value;
+                        break;
+                    case "buyfailed":
+                        next.BuyFailed = value;
+                        break;
+                }
+            }
+
+            // a file without items means nothing is for sale
+            next.Items = items;
+            Log($"Loaded {ShopFileName} ({items.Count} item(s)).");
+        }
+        catch (Exception e)
+        {
+            loadedShopWriteTime = DateTime.MinValue; // try again at the next check
+            Log($"Could not load {ShopFileName}, keeping the previous items: {e.Message}");
+        }
+    }
+
+    // The first time, the meteor is carried over from the old meteor settings of feed.txt
+    private void EnsureShopFileExists(Settings legacy)
+    {
+        string meteorMessage = legacy.MeteorMessage;
+        string[] lines =
+        {
+            "# ======================================================================",
+            "#  Shop",
+            "# ======================================================================",
+            "#",
+            "#  Everything wolf coins can buy. Players see this list in the HUD mod's Buy menu",
+            "#  and with !shop, and buy with !buy <id>. This file reloads about 10 seconds after",
+            "#  it is saved. Lines starting with # are ignored.",
+            "#",
+            "#    item = id | Label | price | action | cooldown | message",
+            "#",
+            "#    id        what players type after !buy, letters and numbers only.",
+            "#    Label     the name shown in the Buy menu.",
+            "#    price     coins it costs.",
+            "#    action    meteor (an alien fish falls from the sky), fish (a fish shadow),",
+            "#              raincloud or voidportal.",
+            "#    cooldown  seconds before ANYBODY can buy this again, 0 for none. Admins are not limited.",
+            "#    message   optional, said to everyone when it is bought. Leave it out to use buyMessage,",
+            "#              or write it empty (a | at the end) to say nothing.",
+            "#",
+            "#  In messages: %player% (the buyer), %item% (the label), %cost% and %coins% (what they have left).",
+            "# ======================================================================",
+            "",
+            $"item = meteor | Meteor | {legacy.MeteorCost} | meteor | {legacy.MeteorCooldownSeconds} | {meteorMessage}",
+            "item = raincloud | Rain Cloud | 6 | raincloud | 30",
+            "item = fish | Fish Shadow | 3 | fish | 10",
+            "# item = voidportal | Void Portal | 25 | voidportal | 120",
+            "",
+            "buyMessage = %player% bought a %item% for %cost%!",
+            "buyNotEnough = A %item% costs %cost%, you have %coins%. Feed the wolves to earn more!",
+            "buyWait = A %item% was only just bought, please wait %seconds% more second(s).",
+            "buyFailed = The %item% could not be bought right now, you were not charged.",
+            "",
+        };
+
+        File.WriteAllText(shopPath, string.Join(Environment.NewLine, lines));
+        Log($"Created {ShopFileName}, edit it to change what can be bought.");
     }
 
     // gambleOutcome = chance | multiplier | message
@@ -1130,20 +1161,11 @@ public class Feed : CovePlugin
             "#  nobodyFed        = what !wolves says before anybody has fed the wolves.",
             "#",
             "#  COINS",
-            "#  Every feed earns coins. !coins shows a player's balance and !meteor spends",
-            "#  coins to call down a meteor for everybody. The coins are kept by Steam ID",
-            "#  in feed-counts.json, next to the feed counts, and spending them does not",
-            "#  lower the feed count.",
+            "#  Every feed earns coins. !coins shows a player's balance. The coins are kept by",
+            "#  Steam ID in feed-counts.json, next to the feed counts, and spending them does",
+            "#  not lower the feed count.",
             "#  coinsPerFeed         = coins earned for each feed, 0 turns coins off.",
-            "#  meteorCost           = coins a meteor costs.",
-            "#  meteorCooldown       = seconds between meteors for the whole server, 0 for none.",
-            "#                         Admins are not limited.",
-            "#  shop                 = an extra thing to buy, one line each: id | Label | price | action | cooldown",
-            "#                         action is fish, raincloud or voidportal. The cooldown is in seconds and",
-            "#                         is for the whole server. The meteor is always in the shop (see above).",
-            "#                         Players use !shop to see the list and !buy <id> to buy.",
-            "#  buyMessage / buyNotEnough / buyWait / buyFailed = the wording for the shop items,",
-            "#                         with %player% %item% %cost% %coins% %seconds%.",
+            "#  What coins can buy (the meteor and the rest) is in shop.txt.",
             "#",
             "#  GAMBLING: !gamble <coins> (or !gamble all) rolls once. Each gambleOutcome line is",
             "#  chance | multiplier | message. The bet is paid back times the multiplier, 0 loses it all.",
@@ -1155,14 +1177,10 @@ public class Feed : CovePlugin
             "#  hudTitle             = the heading on the Wolfpark HUD mod's panel (up to 40 letters).",
             "#  hudTitleColor        = its colour as six hex digits, like 00FFFF.",
             "#  In the coin messages you can also use  %coins% (balance, like \"3 coins\"),",
-            "#  %earned% (coins from this feed), %cost% (the meteor price) and %seconds%",
-            "#  (time left to wait). Leave a message empty to send nothing.",
+            "#  %earned% (coins from this feed) and %cost% (the meteor price). Leave a message",
+            "#  empty to send nothing.",
             "#  coinMessage          = told only to the player after each feed.",
             "#  coinsBalance         = the answer to !coins.",
-            "#  meteorMessage        = said to everyone when a meteor is bought.",
-            "#  notEnoughMessage     = when a player can't afford a meteor.",
-            "#  meteorWaitMessage    = when another meteor was called too recently.",
-            "#  meteorFailedMessage  = if the meteor can't be spawned, the coins are given back.",
             "# ======================================================================",
             "",
             "reply = %player% fed the wolves. That's %times% so far!",
@@ -1173,12 +1191,6 @@ public class Feed : CovePlugin
             "hungryTo = player",
             "",
             "coinsPerFeed = 1",
-            "meteorCost = 10",
-            "meteorCooldown = 30",
-            "shop = raincloud | Rain Cloud | 6 | raincloud | 30",
-            "shop = fish | Fish Shadow | 3 | fish | 10",
-            "# shop = voidportal | Void Portal | 25 | voidportal | 120",
-            "buyMessage = %player% bought a %item% for %cost%!",
             "gamble = on",
             "gambleMin = 1",
             "gambleMax = 100",
@@ -1194,10 +1206,6 @@ public class Feed : CovePlugin
             "hudTitleColor = 00FFFF",
             "coinMessage = +%earned% (you have %coins%). A meteor costs %cost%, type !meteor when you have enough.",
             "coinsBalance = You have %coins%. A meteor costs %cost%, feed the wolves with !feed to earn more.",
-            "meteorMessage = %player% spent %cost% to call down a meteor!",
-            "notEnoughMessage = A meteor costs %cost%, you have %coins%. Feed the wolves to earn more!",
-            "meteorWaitMessage = A meteor was only just called, please wait %seconds% more second(s).",
-            "meteorFailedMessage = The meteor could not be called right now, you were not charged.",
             "",
             "topCount = 5",
             "wolvesSummary = The wolves have been fed %total% times. You have fed them %count%.",

@@ -17,7 +17,7 @@ the Steam lobby data). On every other server the mod stays hidden and does nothi
 
 ## Server
 Replace `Cove.Feed.dll` in `plugins/` with the new build and run `!reloadplugins feed` (or restart). Nothing to
-configure; the coin price of the meteor shown on the button is the `meteorCost` from `feed.txt`.
+configure; what the Buy menu lists comes from `shop.txt` (created next to `feed.txt`), the heading and gambling odds from `feed.txt`.
 
 ## How it works
 The Feed plugin writes `wp_hud=1`, `wp_meteor_cost` and `wp_shop` (what the Buy menu lists), `wp_gamble` (bet limits) and one `wp_p<SteamID>` = `coins,feeds[,roll,multiplier,change]` entry per online player
