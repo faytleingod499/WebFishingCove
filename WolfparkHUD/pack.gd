@@ -12,10 +12,16 @@ func _init():
 	var packer = PCKPacker.new()
 	packer.pck_start(out, 32)
 	packer.add_file("res://mods/WolfparkHUD/main.gd", source)
-	# the Lonely title as a resource file, for registering it through Lure when Lure is installed
-	var title_file = source.get_base_dir().plus_file("titles/lonely.tres")
-	if File.new().file_exists(title_file):
-		packer.add_file("res://mods/WolfparkHUD/titles/lonely.tres", title_file)
+	# the titles as resource files, for registering them through Lure when Lure is installed
+	var titles_dir = source.get_base_dir().plus_file("titles")
+	var dir = Directory.new()
+	if dir.open(titles_dir) == OK:
+		dir.list_dir_begin(true, true)
+		var file = dir.get_next()
+		while file != "":
+			if file.ends_with(".tres"):
+				packer.add_file("res://mods/WolfparkHUD/titles/" + file, titles_dir.plus_file(file))
+			file = dir.get_next()
 	var result = packer.flush(true)
 	print("pack result: ", result)
 	quit()
