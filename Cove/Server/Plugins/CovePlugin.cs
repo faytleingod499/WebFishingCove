@@ -190,6 +190,12 @@ namespace Cove.Server.Plugins
             ParentServer.UnregisterCommand(command);
         }
 
+        /// <summary>Who the command is for. !help only lists the commands the player can use. Defaults to everyone.</summary>
+        public void SetCommandAccess(string command, CommandAccess access)
+        {
+            ParentServer.SetCommandAccess(command, access);
+        }
+
         public bool DoesCommandExist(string command)
         {
             return ParentServer.DoseCommandExist(command);

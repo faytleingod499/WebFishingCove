@@ -11,8 +11,17 @@ using System.Threading.Tasks;
 namespace Cove.Server
 {
 
+    /// <summary>Who may use a command. Only used to decide which commands !help shows, a command still checks for itself.</summary>
+    public enum CommandAccess
+    {
+        Everyone,
+        Admin,
+        Host,
+    }
+
     public class RegisteredCommand
     {
+        public CommandAccess Access = CommandAccess.Everyone;
         public string Command;
         public string Description;
         public Action<WFPlayer, string[]> Callback;
@@ -54,9 +63,16 @@ namespace Cove.Server
                 "help",
                 (player, args) =>
                 {
+                    // only the commands this player can use
+                    bool admin = isPlayerAdmin(player.SteamId);
+                    bool host = player.SteamId.m_SteamID == serverPlayer.SteamId.m_SteamID;
                     string commands = "Commands:";
-                    foreach (var cmd in Commands)
+                    foreach (var cmd in Commands.ToList())
                     {
+                        if (cmd.Access == CommandAccess.Admin && !admin)
+                            continue;
+                        if (cmd.Access == CommandAccess.Host && !host)
+                            continue;
                         commands += "\n" + $"{cmd.Command} - {cmd.Description}";
                     }
                     messagePlayer(commands, player.SteamId);
@@ -76,6 +92,7 @@ namespace Cove.Server
                 ["reload"]
             );
             SetCommandDescription("reloadplugins", "Reloads the plugins from the plugins folder, or one plugin by its id");
+            SetCommandAccess("reloadplugins", CommandAccess.Admin);
 
             RegisterCommand(command: "exit", aliases: ["shutdown"], cb: (player, args) =>
             {
@@ -91,6 +108,7 @@ namespace Cove.Server
 
             });
             SetCommandDescription("exit", "Shuts down the server (host only)");
+            SetCommandAccess("exit", CommandAccess.Host);
 
             RegisterCommand("kick", (player, args) =>
             {
@@ -119,6 +137,7 @@ namespace Cove.Server
                 }
             });
             SetCommandDescription("kick", "Kicks a player from the server");
+            SetCommandAccess("kick", CommandAccess.Admin);
 
             RegisterCommand("ban", (player, args) =>
             {
@@ -204,6 +223,7 @@ namespace Cove.Server
                 }
             );
             SetCommandDescription("ban", "Bans a player from the server");
+            SetCommandAccess("ban", CommandAccess.Admin);
 
             RegisterCommand(
                 "unban",
@@ -245,6 +265,7 @@ namespace Cove.Server
                 }
             );
             SetCommandDescription("unban", "Removes a player (by Steam ID) from the ban list");
+            SetCommandAccess("unban", CommandAccess.Admin);
 
             RegisterCommand(
                 command: "prev",
@@ -280,6 +301,7 @@ namespace Cove.Server
                 "prev",
                 "Shows a list of previous players that were connected to the server"
             );
+            SetCommandAccess("prev", CommandAccess.Admin);
         }
 
         public void RegisterCommand(string command, Action<WFPlayer, string[]> cb, string[]? aliases = null)
@@ -299,6 +321,17 @@ namespace Cove.Server
 
             Commands.Add(new RegisteredCommand(command, "", cb, aliases));
 
+        }
+
+        public void SetCommandAccess(string command, CommandAccess access)
+        {
+            var cmd = Commands.Find(c => c.Command == command);
+            if (cmd == null)
+            {
+                Log($"Command '{command}' not found!");
+                return;
+            }
+            cmd.Access = access;
         }
 
         public void UnregisterCommand(string command)

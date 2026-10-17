@@ -103,6 +103,12 @@ public class ChalkSaves : CovePlugin
         Register("chalkshare", "Offers a copy of a save to a player | Usage: !chalkshare <name> <player>", ShareSave);
         Register("chalkaccept", "Takes the chalk save somebody offered you | Usage: !chalkaccept [new name]", AcceptOffer);
         Register("chalkdecline", "Turns down the chalk save somebody offered you", DeclineOffer);
+
+        // with admin only access set in chalksaves.txt, the other players don't see these in !help
+        if (saveAdminsOnly)
+            SetCommandAccess("chalksave", CommandAccess.Admin);
+        if (loadAdminsOnly)
+            SetCommandAccess("chalkload", CommandAccess.Admin);
     }
 
     public override void onEnd()

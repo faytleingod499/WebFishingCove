@@ -43,6 +43,7 @@ public class ClearChalk : CovePlugin
             }
         );
         SetCommandDescription("clearchalk", "Clears a chalk canvas (0-3) or all of them");
+        SetCommandAccess("clearchalk", CommandAccess.Admin);
 
         RegisterCommand(
             command: "clearoutside",
@@ -61,6 +62,7 @@ public class ClearChalk : CovePlugin
             }
         );
         SetCommandDescription("clearoutside", "Clears only the chalk outside the canvases (optionally one canvas 0-3)");
+        SetCommandAccess("clearoutside", CommandAccess.Admin);
     }
 
     public override void onEnd()

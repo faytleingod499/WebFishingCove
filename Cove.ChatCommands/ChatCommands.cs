@@ -76,6 +76,7 @@ public class ChatCommands : CovePlugin
             }
         );
         SetCommandDescription("users", "Shows all players in the server");
+        SetCommandAccess("users", CommandAccess.Admin);
 
         RegisterCommand("spawn", (player, args) =>
         {
@@ -121,6 +122,7 @@ public class ChatCommands : CovePlugin
             }
         });
         SetCommandDescription("spawn", "Spawns an actor");
+        SetCommandAccess("spawn", CommandAccess.Admin);
 
         RegisterCommand("setjoinable", (player, args) =>
         {
@@ -152,6 +154,7 @@ public class ChatCommands : CovePlugin
             }
         });
         SetCommandDescription("setjoinable", "Sets the lobby to joinable or not");
+        SetCommandAccess("setjoinable", CommandAccess.Admin);
 
         RegisterCommand("refreshadmins", (player, args) =>
         {
@@ -159,6 +162,7 @@ public class ChatCommands : CovePlugin
             Server.readAdmins();
         });
         SetCommandDescription("refreshadmins", "Refreshes the admin list");
+        SetCommandAccess("refreshadmins", CommandAccess.Admin);
 
         RegisterCommand("uptime", (player, args) =>
         {
@@ -197,6 +201,7 @@ public class ChatCommands : CovePlugin
             SendGlobalChatMessage($"[Server] {message}");
         });
         SetCommandDescription("say", "Sends a message to all players");
+        SetCommandAccess("say", CommandAccess.Admin);
 
         RegisterCommand(command: "chalkrecent", aliases: ["recentchalk"], callback: (player, args) =>
         {
@@ -215,6 +220,7 @@ public class ChatCommands : CovePlugin
             SendPlayerChatMessage(player, message);
         });
         SetCommandDescription("chalkrecent", "Shows the 10 most recent players to use chalk");
+        SetCommandAccess("chalkrecent", CommandAccess.Admin);
 
         RegisterCommand("plugins", (player, args) =>
         {
@@ -227,6 +233,7 @@ public class ChatCommands : CovePlugin
             SendPlayerChatMessage(player, message);
         });
         SetCommandDescription("plugins", "Shows all loaded plugins");
+        SetCommandAccess("plugins", CommandAccess.Admin);
         
         RegisterCommand("steam", (player, args) =>
         {
@@ -247,6 +254,8 @@ public class ChatCommands : CovePlugin
             }
             SendPlayerChatMessage(player, $"{plr.Username}: {plr.FisherID} - SteamID: {plr.SteamId.m_SteamID}");
         });
+        SetCommandDescription("steam", "Shows the Steam ID of a player | Usage: !steam <name or fisher ID>");
+        SetCommandAccess("steam", CommandAccess.Admin);
 
         RegisterCommand(
             command: "joinmessage",
