@@ -501,7 +501,8 @@ public class ChatTriggers : CovePlugin
 
         if (ulong.TryParse(ident, out steamId) && steamId > 0)
         {
-            name = GetAllPlayers().FirstOrDefault(p => p.SteamId.m_SteamID == steamId)?.Username ?? ident;
+            ulong wanted = steamId;
+            name = GetAllPlayers().FirstOrDefault(p => p.SteamId.m_SteamID == wanted)?.Username ?? ident;
             return true;
         }
         return false;
