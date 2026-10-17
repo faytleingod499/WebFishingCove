@@ -76,6 +76,7 @@ public class Feed : CovePlugin
         public int MeteorCost = 10;
         public string HudTitle = "Ether's Wolf Park";
         public string HudTitleColor = "00FFFF";
+        public bool ReplyToEveryone = true; // feedReplyTo = everyone / player
         public string HudChatColor = "87CEEB"; // sky blue, empty = the mod leaves server messages alone
         public int MeteorCooldownSeconds = 30;
         public string CoinMessage = "+%earned% (you have %coins%). A meteor costs %cost%, type !meteor when you have enough.";
@@ -432,10 +433,18 @@ public class Feed : CovePlugin
         }
 
         string times = mine == 1 ? "1 time" : $"{mine} times";
+        void Reply(string text)
+        {
+            if (s.ReplyToEveryone)
+                SendGlobalChatMessage(text);
+            else
+                SendPlayerChatMessage(player, text);
+        }
+
         if (s.Replies.Count > 0)
-            SendGlobalChatMessage(Fill(s.Replies[Random.Shared.Next(s.Replies.Count)], player.Username, times, mine, total));
+            Reply(Fill(s.Replies[Random.Shared.Next(s.Replies.Count)], player.Username, times, mine, total));
         if (s.Howl.Length > 0)
-            SendGlobalChatMessage(Fill(s.Howl, player.Username, times, mine, total));
+            Reply(Fill(s.Howl, player.Username, times, mine, total));
 
         if (s.CoinsPerFeed > 0 && s.CoinMessage.Length > 0)
             SendPlayerChatMessage(player, FillCoins(s.CoinMessage, player.Username, coins, s, s.CoinsPerFeed));
@@ -895,6 +904,15 @@ public class Feed : CovePlugin
                     else
                         Log("hudTitleColor must be six hex digits like 00FFFF, using 00FFFF.");
                     break;
+                case "feedreplyto":
+                    string who = value.Trim().ToLowerInvariant();
+                    if (who is "everyone" or "all")
+                        next.ReplyToEveryone = true;
+                    else if (who is "player" or "feeder")
+                        next.ReplyToEveryone = false;
+                    else
+                        Log("feedReplyTo must be everyone or player, using everyone.");
+                    break;
                 case "hudchatcolor":
                     string chatHex = value.TrimStart('#');
                     if (chatHex.Length == 0)
@@ -1188,6 +1206,8 @@ public class Feed : CovePlugin
             "#  gambleResult / gambleAnnounce / gambleUsage / gambleNotEnough / gambleWait = wording.",
             "#  hudTitle             = the heading on the Wolfpark HUD mod's panel (up to 40 letters).",
             "#  hudTitleColor        = its colour as six hex digits, like 00FFFF.",
+            "#  feedReplyTo          = who sees the reply and the howl when someone feeds: everyone or player",
+            "#                         (player = only the one who fed).",
             "#  hudChatColor         = the colour the mod shows server messages in, sky blue by default",
             "#                         (87CEEB). Leave it empty to keep them the normal colour.",
             "#  In the coin messages you can also use  %coins% (balance, like \"3 coins\"),",
@@ -1217,6 +1237,7 @@ public class Feed : CovePlugin
             "gambleResult = %label% (bet %bet%, %change%, you have %coins%)",
             "gambleAnnounce = %player% hit the JACKPOT and won %won%!",
             "hudTitle = Ether's Wolf Park",
+            "feedReplyTo = everyone",
             "hudTitleColor = 00FFFF",
             "hudChatColor = 87CEEB",
             "coinMessage = +%earned% (you have %coins%). A meteor costs %cost%, type !meteor when you have enough.",
