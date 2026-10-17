@@ -166,15 +166,17 @@ public class ChalkSaves : CovePlugin
         target = player.SteamId.m_SteamID;
         targetName = player.Username;
 
-        if (args.Length == normalArgs)
-            return true;
-        if (args.Length != normalArgs + 1)
+        if (args.Length < normalArgs)
             return false;
+
+        // everything after the normal arguments is the player, a name can have spaces in it like "Fayt | Ether"
+        string ident = string.Join(" ", args.Skip(normalArgs)).Trim();
+        if (ident.Length == 0)
+            return true;
 
         if (!IsPlayerAdmin(player))
             return false;
 
-        string ident = args[normalArgs].Trim();
         if (Regex.IsMatch(ident, @"^\d{17}$") && ulong.TryParse(ident, out ulong steamId))
         {
             target = steamId;
