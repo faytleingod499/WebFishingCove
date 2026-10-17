@@ -11,23 +11,26 @@ using Cove.Server.Plugins;
 ///   !feed     feed the wolves
 ///   !wolves   shows the top feeders and the server total
 ///
-/// To change the wording, edit Replies and Howl below and rebuild.
+/// The wording, the cooldown and the size of the top list are set in feed.txt in the server's root directory
+/// (next to server.cfg), which is created on first start and reloads about 10 seconds after it is saved.
 /// </summary>
 public class Feed : CovePlugin
 {
     private const string CountsFileName = "feed-counts.json";
-    private const long CooldownMs = 3000;
-    private const int TopCount = 5;
+    private const string SettingsFileName = "feed.txt";
+    private const long ReloadCheckMs = 10_000;
+    private const int MaxReplies = 20;
 
-    // {0} = the player's name, {1} = how many times they have fed the wolves ("1 time", "12 times"),
-    // {2} = how many times everybody together has
-    private static readonly string[] Replies =
-    [
-        "{0} fed the wolves. That's {1} so far!",
-    ];
-
-    // sent as a second line right after the reply
-    private const string Howl = "Awooooooooo!";
+    private sealed class Settings
+    {
+        public List<string> Replies = new() { "%player% fed the wolves. That's %times% so far!" };
+        public string Howl = "Awooooooooo!";
+        public int CooldownSeconds = 3;
+        public int TopCount = 5;
+        public string CooldownMessage = "The wolves are still eating, try again in a moment.";
+        public string WolvesSummary = "The wolves have been fed %total% times. You have fed them %count%.";
+        public string NobodyFed = "Nobody has fed the wolves yet. Type !feed to be the first!";
+    }
 
     private sealed class Record
     {
@@ -39,6 +42,11 @@ public class Feed : CovePlugin
     private readonly Dictionary<ulong, Record> counts = new();
     private readonly Dictionary<ulong, long> lastFed = new();
     private string countsPath = "";
+    private string settingsPath = "";
+    private Settings settings = new();
+    private DateTime loadedWriteTime = DateTime.MinValue;
+    private long nextReloadCheckTick;
+    private bool running;
 
     public Feed(CoveServer server) : base(server) { }
 
@@ -46,8 +54,25 @@ public class Feed : CovePlugin
     {
         base.onInit();
 
-        countsPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, CountsFileName);
+        string root = AppDomain.CurrentDomain.BaseDirectory;
+        countsPath = Path.Combine(root, CountsFileName);
+        settingsPath = Path.Combine(root, SettingsFileName);
         LoadCounts();
+
+        lock (sync)
+        {
+            try
+            {
+                EnsureSettingsFileExists();
+                ReloadSettings();
+            }
+            catch (Exception e)
+            {
+                Log($"Could not load {SettingsFileName}, using the defaults: {e.Message}");
+            }
+            nextReloadCheckTick = Environment.TickCount64 + ReloadCheckMs;
+            running = true;
+        }
 
         RegisterCommand(
             command: "feed",
@@ -87,8 +112,50 @@ public class Feed : CovePlugin
     public override void onEnd()
     {
         base.onEnd();
+        lock (sync)
+            running = false;
         ParentServer.UnregisterCommand("feed");
         ParentServer.UnregisterCommand("wolves");
+    }
+
+    // triggered 12 times a second by the server
+    public override void onUpdate()
+    {
+        lock (sync)
+        {
+            if (!running)
+                return;
+
+            long now = Environment.TickCount64;
+            if (now < nextReloadCheckTick)
+                return;
+            nextReloadCheckTick = now + ReloadCheckMs;
+
+            try
+            {
+                if (File.Exists(settingsPath) && File.GetLastWriteTimeUtc(settingsPath) != loadedWriteTime)
+                    ReloadSettings();
+            }
+            catch (Exception e)
+            {
+                loadedWriteTime = DateTime.MinValue; // probably mid-save, try again at the next check
+                Log($"Could not reload {SettingsFileName}: {e.Message}");
+            }
+        }
+    }
+
+    private Settings GetSettings()
+    {
+        lock (sync)
+            return settings;
+    }
+
+    private static string Fill(string text, string player, string times, int count, long total)
+    {
+        return text.Replace("%player%", player)
+                   .Replace("%times%", times)
+                   .Replace("%count%", count.ToString())
+                   .Replace("%total%", total.ToString());
     }
 
     private void FeedWolves(WFPlayer player)
@@ -96,13 +163,15 @@ public class Feed : CovePlugin
         ulong id = player.SteamId.m_SteamID;
         int mine;
         long total;
+        Settings s = GetSettings();
 
         lock (sync)
         {
             long now = Environment.TickCount64;
-            if (lastFed.TryGetValue(id, out long last) && now - last < CooldownMs)
+            if (s.CooldownSeconds > 0 && lastFed.TryGetValue(id, out long last) && now - last < s.CooldownSeconds * 1000L)
             {
-                SendPlayerChatMessage(player, "The wolves are still eating, try again in a moment.");
+                if (s.CooldownMessage.Length > 0)
+                    SendPlayerChatMessage(player, s.CooldownMessage);
                 return;
             }
             lastFed[id] = now;
@@ -118,8 +187,10 @@ public class Feed : CovePlugin
         }
 
         string times = mine == 1 ? "1 time" : $"{mine} times";
-        SendGlobalChatMessage(string.Format(Replies[Random.Shared.Next(Replies.Length)], player.Username, times, total));
-        SendGlobalChatMessage(Howl);
+        if (s.Replies.Count > 0)
+            SendGlobalChatMessage(Fill(s.Replies[Random.Shared.Next(s.Replies.Count)], player.Username, times, mine, total));
+        if (s.Howl.Length > 0)
+            SendGlobalChatMessage(Fill(s.Howl, player.Username, times, mine, total));
     }
 
     private void ShowTop(WFPlayer player)
@@ -127,25 +198,137 @@ public class Feed : CovePlugin
         List<Record> top;
         long total;
         int mine;
+        Settings s = GetSettings();
 
         lock (sync)
         {
-            top = counts.Values.OrderByDescending(r => r.Count).ThenBy(r => r.Name, StringComparer.OrdinalIgnoreCase).Take(TopCount).ToList();
+            top = counts.Values.OrderByDescending(r => r.Count).ThenBy(r => r.Name, StringComparer.OrdinalIgnoreCase).Take(s.TopCount).ToList();
             total = counts.Values.Sum(r => (long)r.Count);
             mine = counts.TryGetValue(player.SteamId.m_SteamID, out Record? own) ? own.Count : 0;
         }
 
         if (total == 0)
         {
-            SendPlayerChatMessage(player, "Nobody has fed the wolves yet. Type !feed to be the first!");
+            SendPlayerChatMessage(player, s.NobodyFed);
             return;
         }
 
-        var lines = new List<string> { $"The wolves have been fed {total} times. You have fed them {mine}." };
+        string mineText = mine == 1 ? "1 time" : $"{mine} times";
+        var lines = new List<string> { Fill(s.WolvesSummary, player.Username, mineText, mine, total) };
         for (int i = 0; i < top.Count; i++)
             lines.Add($"{i + 1}. {top[i].Name} - {top[i].Count}");
 
         SendPlayerChatMessage(player, string.Join("\n", lines));
+    }
+
+    // ---- settings ----
+
+    private void ReloadSettings()
+    {
+        // remember the write time BEFORE reading, so an edit made while we read gets picked up next time
+        loadedWriteTime = File.GetLastWriteTimeUtc(settingsPath);
+
+        var next = new Settings();
+        var replies = new List<string>();
+        bool anyReplyLine = false;
+
+        foreach (string raw in File.ReadAllLines(settingsPath))
+        {
+            string line = raw.Trim();
+            if (line.Length == 0 || line.StartsWith('#'))
+                continue;
+            int separator = line.IndexOf('=');
+            if (separator <= 0)
+                continue;
+
+            string key = line.Substring(0, separator).Trim().ToLowerInvariant();
+            string value = line.Substring(separator + 1).Trim();
+
+            switch (key)
+            {
+                case "reply":
+                    anyReplyLine = true;
+                    if (value.Length > 0 && replies.Count < MaxReplies)
+                        replies.Add(value);
+                    break;
+                case "howl":
+                    next.Howl = value;
+                    break;
+                case "cooldown":
+                    if (int.TryParse(value, out int cooldown) && cooldown >= 0)
+                        next.CooldownSeconds = Math.Min(cooldown, 3600);
+                    else
+                        Log("cooldown must be a number of seconds, using 3.");
+                    break;
+                case "topcount":
+                    if (int.TryParse(value, out int top) && top >= 1)
+                        next.TopCount = Math.Min(top, 10);
+                    else
+                        Log("topCount must be a number from 1 to 10, using 5.");
+                    break;
+                case "cooldownmessage":
+                    next.CooldownMessage = value;
+                    break;
+                case "wolvessummary":
+                    next.WolvesSummary = value;
+                    break;
+                case "nobodyfed":
+                    next.NobodyFed = value;
+                    break;
+            }
+        }
+
+        // reply lines that are all empty mean nothing is said, no reply lines at all keep the default
+        if (anyReplyLine)
+            next.Replies = replies;
+
+        settings = next;
+        Log($"Loaded {SettingsFileName}.");
+    }
+
+    private void EnsureSettingsFileExists()
+    {
+        if (File.Exists(settingsPath))
+            return;
+
+        string[] lines =
+        {
+            "# ======================================================================",
+            "#  Feed The Wolves",
+            "# ======================================================================",
+            "#",
+            "#  Settings for !feed and !wolves. You can edit and save this file while the",
+            "#  server is running, it is picked up within about 10 seconds.",
+            "#",
+            "#  In the messages you can use:",
+            "#    %player%   the name of the player who fed the wolves",
+            "#    %times%    how many times that player has fed them: \"1 time\", \"12 times\"",
+            "#    %count%    the same number on its own: 12",
+            "#    %total%    how many times everybody together has fed them",
+            "#",
+            "#  reply            = what the server says when somebody types !feed. Add as many",
+            "#                     reply lines as you like, one is picked at random each time.",
+            "#  howl             = a second line sent right after the reply. Leave empty for none.",
+            "#  cooldown         = seconds a player must wait between feeds, 0 for none.",
+            "#  cooldownMessage  = what a player is told if they feed again too soon.",
+            "#  topCount         = how many players !wolves lists, 1 to 10.",
+            "#  wolvesSummary    = the first line of !wolves, shown only to the player who typed it.",
+            "#  nobodyFed        = what !wolves says before anybody has fed the wolves.",
+            "# ======================================================================",
+            "",
+            "reply = %player% fed the wolves. That's %times% so far!",
+            "howl = Awooooooooo!",
+            "cooldown = 3",
+            "cooldownMessage = The wolves are still eating, try again in a moment.",
+            "",
+            "topCount = 5",
+            "wolvesSummary = The wolves have been fed %total% times. You have fed them %count%.",
+            "nobodyFed = Nobody has fed the wolves yet. Type !feed to be the first!",
+            "",
+        };
+
+        File.WriteAllText(settingsPath, string.Join(Environment.NewLine, lines));
+        Log($"Created {SettingsFileName}, edit it to change the messages.");
     }
 
     // ---- saving ----
