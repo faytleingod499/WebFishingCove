@@ -1,7 +1,7 @@
 # Wolfpark HUD
 
 A client mod (for [GDWeave](https://thunderstore.io/c/webfishing/p/NotNet/GDWeave/)) that adds a small panel with
-your wolf coin balance and **Feed Wolves** / **Meteor** buttons.
+your wolf coin balance, a **Feed Wolves** button, a **Buy** menu (everything the server sells) and a bet box with a **Gamble** button.
 
 On such a server anything you type that starts with `!` is sent to the server only and does not show in chat, and the buttons do the same. The heading (default "Ether's Wolf Park", cyan) comes from `hudTitle` / `hudTitleColor` in `feed.txt`.
 
@@ -20,7 +20,7 @@ Replace `Cove.Feed.dll` in `plugins/` with the new build and run `!reloadplugins
 configure; the coin price of the meteor shown on the button is the `meteorCost` from `feed.txt`.
 
 ## How it works
-The Feed plugin writes `wp_hud=1`, `wp_meteor_cost` and one `wp_p<SteamID>` = `coins,feeds` entry per online player
+The Feed plugin writes `wp_hud=1`, `wp_meteor_cost` and `wp_shop` (what the Buy menu lists), `wp_gamble` (bet limits) and one `wp_p<SteamID>` = `coins,feeds[,roll,multiplier,change]` entry per online player
 into the lobby data. The mod reads its own entry once or twice a second. The buttons type `!feed` / `!meteor` for
 you through the game's own chat, so the server needs no extra packet.
 

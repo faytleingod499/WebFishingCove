@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using Cove.Server;
 using Cove.Server.Actor;
@@ -12,6 +13,8 @@ using Steamworks;
 ///   !feed     feed the wolves, which also earns coins
 ///   !coins    shows how many coins you have
 ///   !meteor   spends coins to call down a meteor
+///   !shop     lists everything coins can buy, !buy <name> buys it
+///   !gamble   bets coins on a wolf roll, !gamble <coins>
 ///   !wolves   shows the top feeders and the server total
 ///
 /// It also announces itself to the optional Wolfpark HUD mod through the Steam lobby data (keys starting with wp_),
@@ -41,6 +44,32 @@ public class Feed : CovePlugin
 
         // coins
         public int CoinsPerFeed = 1;
+        public List<ShopItem> Extras = new()
+        {
+            new ShopItem { Id = "raincloud", Label = "Rain Cloud", Price = 6, Action = "raincloud", CooldownSeconds = 30 },
+            new ShopItem { Id = "fish", Label = "Fish Shadow", Price = 3, Action = "fish", CooldownSeconds = 10 },
+        };
+        public string BuyMessage = "%player% bought a %item% for %cost%!";
+        public string BuyNotEnough = "A %item% costs %cost%, you have %coins%. Feed the wolves to earn more!";
+        public string BuyWait = "A %item% was only just bought, please wait %seconds% more second(s).";
+        public string BuyFailed = "The %item% could not be bought right now, you were not charged.";
+        public bool GambleEnabled = true;
+        public int GambleMin = 1;
+        public int GambleMax = 100;
+        public int GambleCooldownSeconds = 3;
+        public double GambleAnnounceAt = 10;
+        public List<Outcome> Outcomes = new()
+        {
+            new Outcome { Chance = 63, Multiplier = 0, Label = "The wolves ate your coins." },
+            new Outcome { Chance = 27, Multiplier = 2, Label = "Doubled!" },
+            new Outcome { Chance = 8.5, Multiplier = 3, Label = "Tripled!" },
+            new Outcome { Chance = 1.5, Multiplier = 10, Label = "JACKPOT!" },
+        };
+        public string GambleResult = "%label% (bet %bet%, %change%, you have %coins%)";
+        public string GambleAnnounce = "%player% hit the JACKPOT and won %won%!";
+        public string GambleUsage = "Usage: !gamble <coins>, from %min% to %max%.";
+        public string GambleNotEnough = "You only have %coins%.";
+        public string GambleWait = "Slow down, the wolves are still counting.";
         public int MeteorCost = 10;
         public string HudTitle = "Ether's Wolf Park";
         public string HudTitleColor = "00FFFF";
@@ -51,6 +80,22 @@ public class Feed : CovePlugin
         public string NotEnoughMessage = "A meteor costs %cost%, you have %coins%. Feed the wolves to earn more!";
         public string MeteorWaitMessage = "A meteor was only just called, please wait %seconds% more second(s).";
         public string MeteorFailedMessage = "The meteor could not be called right now, you were not charged.";
+    }
+
+    private sealed class ShopItem
+    {
+        public string Id = "";
+        public string Label = "";
+        public int Price;
+        public string Action = "";
+        public int CooldownSeconds;
+    }
+
+    private sealed class Outcome
+    {
+        public double Chance;
+        public double Multiplier;
+        public string Label = "";
     }
 
     private sealed class Record
@@ -64,6 +109,9 @@ public class Feed : CovePlugin
     private readonly Dictionary<ulong, Record> counts = new();
     private readonly Dictionary<ulong, long> lastFed = new();
     private long lastMeteorTick = long.MinValue / 2;
+    private readonly Dictionary<string, long> lastBought = new();
+    private readonly Dictionary<ulong, long> lastGamble = new();
+    private readonly Dictionary<ulong, (int Seq, double Mult, int Net)> gambleResults = new();
     private readonly Dictionary<ulong, long> hungryAt = new(); // when to tell a player the wolves are hungry again
     private string countsPath = "";
     private string settingsPath = "";
@@ -77,8 +125,8 @@ public class Feed : CovePlugin
     private bool publishDirty = true;
     private long nextPublishTick;
     private ulong publishedLobby;
-    private string publishedCost = "";
     private string publishedTitle = "";
+    private string publishedShop = "";
     private readonly Dictionary<ulong, string> published = new();
 
     public Feed(CoveServer server) : base(server) { }
@@ -174,6 +222,45 @@ public class Feed : CovePlugin
             }
         );
         SetCommandDescription("meteor", "Spend wolf coins to call down a meteor");
+
+        RegisterCommand(
+            command: "shop",
+            aliases: [],
+            callback: (player, args) => Safely("shop", () => ShowShop(player))
+        );
+        SetCommandDescription("shop", "Lists what wolf coins can buy");
+
+        RegisterCommand(
+            command: "buy",
+            aliases: [],
+            callback: (player, args) => Safely("buy", () =>
+            {
+                if (args.Length == 0)
+                    ShowShop(player);
+                else
+                    BuyItem(player, args[0]);
+            })
+        );
+        SetCommandDescription("buy", "Buy something with wolf coins | Usage: !buy <name>");
+
+        RegisterCommand(
+            command: "gamble",
+            aliases: ["bet"],
+            callback: (player, args) => Safely("gamble", () => Gamble(player, args))
+        );
+        SetCommandDescription("gamble", "Bet wolf coins on a wolf roll | Usage: !gamble <coins>");
+    }
+
+    private void Safely(string command, Action run)
+    {
+        try
+        {
+            run();
+        }
+        catch (Exception e)
+        {
+            Log($"!{command} failed: {e.Message}");
+        }
     }
 
     public override void onEnd()
@@ -188,6 +275,9 @@ public class Feed : CovePlugin
         ParentServer.UnregisterCommand("wolves");
         ParentServer.UnregisterCommand("coins");
         ParentServer.UnregisterCommand("meteor");
+        ParentServer.UnregisterCommand("shop");
+        ParentServer.UnregisterCommand("buy");
+        ParentServer.UnregisterCommand("gamble");
         ClearLobbyData();
     }
 
@@ -364,17 +454,20 @@ public class Feed : CovePlugin
             {
                 // a new lobby, so nothing has been written to it yet
                 published.Clear();
-                publishedCost = "";
+                publishedShop = "";
                 publishedTitle = "";
                 SteamMatchmaking.SetLobbyData(lobby, "wp_hud", "1");
                 publishedLobby = lobby.m_SteamID;
             }
 
-            string cost = s.MeteorCost.ToString();
-            if (cost != publishedCost)
+            // what the Buy button lists:  id~Label~price;id~Label~price   and the bet limits of the gamble box
+            string shop = string.Join(";", ShopList(s).Select(i => $"{i.Id}~{Clean(i.Label)}~{i.Price}"));
+            string gamble = s.GambleEnabled ? $"{s.GambleMin},{s.GambleMax}" : "";
+            if (shop + "|" + gamble != publishedShop)
             {
-                SteamMatchmaking.SetLobbyData(lobby, "wp_meteor_cost", cost);
-                publishedCost = cost;
+                SteamMatchmaking.SetLobbyData(lobby, "wp_shop", shop);
+                SteamMatchmaking.SetLobbyData(lobby, "wp_gamble", gamble);
+                publishedShop = shop + "|" + gamble;
             }
 
             string title = s.HudTitle + "|" + s.HudTitleColor;
@@ -391,7 +484,11 @@ public class Feed : CovePlugin
                 foreach (WFPlayer player in GetAllPlayers())
                 {
                     ulong id = player.SteamId.m_SteamID;
-                    wanted[id] = counts.TryGetValue(id, out Record? record) ? $"{record.Coins},{record.Count}" : "0,0";
+                    string basic = counts.TryGetValue(id, out Record? record) ? $"{record.Coins},{record.Count}" : "0,0";
+                    // the last gamble, so the mod can show what happened: number of the roll, multiplier, coins won or lost
+                    if (gambleResults.TryGetValue(id, out var roll))
+                        basic += $",{roll.Seq},{roll.Mult.ToString(CultureInfo.InvariantCulture)},{roll.Net}";
+                    wanted[id] = basic;
                 }
             }
 
@@ -424,7 +521,8 @@ public class Feed : CovePlugin
             if (lobby.IsValid() && publishedLobby == lobby.m_SteamID)
             {
                 SteamMatchmaking.SetLobbyData(lobby, "wp_hud", "");
-                SteamMatchmaking.SetLobbyData(lobby, "wp_meteor_cost", "");
+                SteamMatchmaking.SetLobbyData(lobby, "wp_shop", "");
+                SteamMatchmaking.SetLobbyData(lobby, "wp_gamble", "");
                 SteamMatchmaking.SetLobbyData(lobby, "wp_title", "");
                 SteamMatchmaking.SetLobbyData(lobby, "wp_title_color", "");
                 foreach (ulong id in published.Keys)
@@ -437,8 +535,213 @@ public class Feed : CovePlugin
         }
         published.Clear();
         publishedLobby = 0;
-        publishedCost = "";
+        publishedShop = "";
         publishedTitle = "";
+    }
+
+    private static string Clean(string text) => text.Replace('~', ' ').Replace(';', ' ').Replace(',', ' ').Replace('|', ' ');
+
+    // the meteor first, then the items from feed.txt
+    private static List<ShopItem> ShopList(Settings s)
+    {
+        var list = new List<ShopItem>
+        {
+            new ShopItem { Id = "meteor", Label = "Meteor", Price = s.MeteorCost, Action = "meteor", CooldownSeconds = s.MeteorCooldownSeconds },
+        };
+        list.AddRange(s.Extras);
+        return list;
+    }
+
+    private void ShowShop(WFPlayer player)
+    {
+        Settings s = GetSettings();
+        string items = string.Join(", ", ShopList(s).Select(i => $"{i.Id} {i.Price}"));
+        SendPlayerChatMessage(player, $"Shop: {items}. Type !buy <name>.");
+    }
+
+    private static string FillItem(string text, string player, ShopItem item, int balance, int seconds = 0)
+    {
+        return text.Replace("%player%", player)
+                   .Replace("%item%", item.Label.ToLowerInvariant())
+                   .Replace("%cost%", Coins(item.Price))
+                   .Replace("%coins%", Coins(balance))
+                   .Replace("%seconds%", seconds.ToString());
+    }
+
+    private void RunShopAction(string action)
+    {
+        switch (action)
+        {
+            case "fish": ParentServer.spawnFish(); break;
+            case "raincloud": ParentServer.spawnRainCloud(); break;
+            case "voidportal": ParentServer.spawnVoidPortal(); break;
+            default: throw new InvalidOperationException($"unknown shop action \"{action}\"");
+        }
+    }
+
+    private void BuyItem(WFPlayer player, string id)
+    {
+        id = id.Trim().ToLowerInvariant();
+        if (id == "meteor")
+        {
+            BuyMeteor(player);
+            return;
+        }
+
+        Settings s = GetSettings();
+        ShopItem? item = s.Extras.FirstOrDefault(i => i.Id == id);
+        if (item == null)
+        {
+            SendPlayerChatMessage(player, $"There is no \"{id}\" in the shop. Type !shop to see what you can buy.");
+            return;
+        }
+
+        ulong pid = player.SteamId.m_SteamID;
+        int coins;
+
+        lock (sync)
+        {
+            long now = Environment.TickCount64;
+            bool admin = IsPlayerAdmin(player);
+
+            if (!admin && item.CooldownSeconds > 0 && lastBought.TryGetValue(item.Id, out long last) && now - last < item.CooldownSeconds * 1000L)
+            {
+                int wait = (int)Math.Ceiling((item.CooldownSeconds * 1000L - (now - last)) / 1000.0);
+                SendPlayerChatMessage(player, FillItem(s.BuyWait, player.Username, item, 0, wait));
+                return;
+            }
+
+            counts.TryGetValue(pid, out Record? record);
+            coins = record?.Coins ?? 0;
+            if (record == null || record.Coins < item.Price)
+            {
+                SendPlayerChatMessage(player, FillItem(s.BuyNotEnough, player.Username, item, coins));
+                return;
+            }
+
+            record.Coins -= item.Price;
+            coins = record.Coins;
+            lastBought[item.Id] = now;
+            SaveCounts();
+        }
+
+        try
+        {
+            RunShopAction(item.Action);
+        }
+        catch (Exception e)
+        {
+            lock (sync)
+            {
+                if (counts.TryGetValue(pid, out Record? record))
+                {
+                    record.Coins += item.Price;
+                    coins = record.Coins;
+                }
+                lastBought.Remove(item.Id);
+                SaveCounts();
+            }
+            Log($"Could not give {player.Username} a {item.Id}: {e.Message}");
+            SendPlayerChatMessage(player, FillItem(s.BuyFailed, player.Username, item, coins));
+            return;
+        }
+
+        Log($"{player.Username} spent {item.Price} coins on {item.Id}.");
+        if (s.BuyMessage.Length > 0)
+            SendGlobalChatMessage(FillItem(s.BuyMessage, player.Username, item, coins));
+    }
+
+    private string FillGamble(string text, string player, int bet, int won, int net, int balance, string label, Settings s)
+    {
+        return text.Replace("%player%", player)
+                   .Replace("%label%", label)
+                   .Replace("%bet%", Coins(bet))
+                   .Replace("%won%", Coins(won))
+                   .Replace("%change%", net >= 0 ? $"+{net}" : $"-{-net}")
+                   .Replace("%coins%", Coins(balance))
+                   .Replace("%min%", s.GambleMin.ToString())
+                   .Replace("%max%", s.GambleMax.ToString());
+    }
+
+    // A wolf roll: the bet is taken, one of the outcomes of feed.txt is picked by its chance, and the bet times
+    // that outcome's multiplier is paid back (0 loses everything).
+    private void Gamble(WFPlayer player, string[] args)
+    {
+        Settings s = GetSettings();
+        if (!s.GambleEnabled || s.Outcomes.Count == 0)
+        {
+            SendPlayerChatMessage(player, "The wolves are not taking bets right now.");
+            return;
+        }
+
+        ulong id = player.SteamId.m_SteamID;
+        int bet;
+        Outcome outcome;
+        int won;
+        int coins;
+
+        lock (sync)
+        {
+            counts.TryGetValue(id, out Record? record);
+            int balance = record?.Coins ?? 0;
+
+            string arg = args.Length > 0 ? args[0].Trim().ToLowerInvariant() : "";
+            if (arg == "all")
+                bet = Math.Min(balance, s.GambleMax);
+            else if (!int.TryParse(arg, out bet))
+            {
+                SendPlayerChatMessage(player, FillGamble(s.GambleUsage, player.Username, 0, 0, 0, balance, "", s));
+                return;
+            }
+
+            if (bet < s.GambleMin || bet > s.GambleMax)
+            {
+                SendPlayerChatMessage(player, FillGamble(s.GambleUsage, player.Username, bet, 0, 0, balance, "", s));
+                return;
+            }
+            if (record == null || record.Coins < bet)
+            {
+                SendPlayerChatMessage(player, FillGamble(s.GambleNotEnough, player.Username, bet, 0, 0, balance, "", s));
+                return;
+            }
+
+            long now = Environment.TickCount64;
+            if (s.GambleCooldownSeconds > 0 && lastGamble.TryGetValue(id, out long last) && now - last < s.GambleCooldownSeconds * 1000L)
+            {
+                SendPlayerChatMessage(player, FillGamble(s.GambleWait, player.Username, bet, 0, 0, balance, "", s));
+                return;
+            }
+            lastGamble[id] = now;
+
+            // pick an outcome by its chance, the chances do not have to add up to 100
+            double total = s.Outcomes.Sum(o => o.Chance);
+            double roll = Random.Shared.NextDouble() * total;
+            outcome = s.Outcomes[^1];
+            foreach (Outcome candidate in s.Outcomes)
+            {
+                if (roll < candidate.Chance)
+                {
+                    outcome = candidate;
+                    break;
+                }
+                roll -= candidate.Chance;
+            }
+
+            won = (int)Math.Floor(bet * outcome.Multiplier);
+            record.Coins += won - bet;
+            coins = record.Coins;
+
+            int seq = gambleResults.TryGetValue(id, out var previous) ? previous.Seq + 1 : 1;
+            gambleResults[id] = (seq, outcome.Multiplier, won - bet);
+            SaveCounts();
+        }
+
+        int net = won - bet;
+        Log($"{player.Username} bet {bet} and got x{outcome.Multiplier} ({(net >= 0 ? "+" : "")}{net}), now has {coins}.");
+        SendPlayerChatMessage(player, FillGamble(s.GambleResult, player.Username, bet, won, net, coins, FillGamble(outcome.Label, player.Username, bet, won, net, coins, "", s), s));
+
+        if (s.GambleAnnounce.Length > 0 && s.GambleAnnounceAt > 0 && outcome.Multiplier >= s.GambleAnnounceAt)
+            SendGlobalChatMessage(FillGamble(s.GambleAnnounce, player.Username, bet, won, net, coins, outcome.Label, s));
     }
 
     private void ShowCoins(WFPlayer player)
@@ -549,6 +852,9 @@ public class Feed : CovePlugin
         var next = new Settings();
         var replies = new List<string>();
         bool anyReplyLine = false;
+        var shopItems = new List<ShopItem>();
+        bool anyShopLine = false;
+        var outcomes = new List<Outcome>();
 
         foreach (string raw in File.ReadAllLines(settingsPath))
         {
@@ -592,6 +898,69 @@ public class Feed : CovePlugin
                         next.CoinsPerFeed = Math.Min(perFeed, 1000);
                     else
                         Log("coinsPerFeed must be a number, 0 or more, using 1.");
+                    break;
+                case "shop":
+                    anyShopLine = true;
+                    if (shopItems.Count < 10 && TryParseShopItem(value, out ShopItem? parsedItem) && parsedItem != null)
+                        shopItems.Add(parsedItem);
+                    break;
+                case "gambleoutcome":
+                    if (outcomes.Count < 12 && TryParseOutcome(value, out Outcome? parsedOutcome) && parsedOutcome != null)
+                        outcomes.Add(parsedOutcome);
+                    break;
+                case "gamble":
+                    next.GambleEnabled = !value.Equals("off", StringComparison.OrdinalIgnoreCase) && !value.Equals("no", StringComparison.OrdinalIgnoreCase) && !value.Equals("false", StringComparison.OrdinalIgnoreCase);
+                    break;
+                case "gamblemin":
+                    if (int.TryParse(value, out int gMin) && gMin >= 1)
+                        next.GambleMin = Math.Min(gMin, 1_000_000);
+                    else
+                        Log("gambleMin must be a number, 1 or more, using 1.");
+                    break;
+                case "gamblemax":
+                    if (int.TryParse(value, out int gMax) && gMax >= 1)
+                        next.GambleMax = Math.Min(gMax, 1_000_000);
+                    else
+                        Log("gambleMax must be a number, 1 or more, using 100.");
+                    break;
+                case "gamblecooldown":
+                    if (int.TryParse(value, out int gWait) && gWait >= 0)
+                        next.GambleCooldownSeconds = Math.Min(gWait, 3600);
+                    else
+                        Log("gambleCooldown must be a number of seconds, using 3.");
+                    break;
+                case "gambleannounceat":
+                    if (double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out double gAt) && gAt >= 0)
+                        next.GambleAnnounceAt = gAt;
+                    else
+                        Log("gambleAnnounceAt must be a multiplier, 0 or more, using 10.");
+                    break;
+                case "gambleresult":
+                    next.GambleResult = value;
+                    break;
+                case "gambleannounce":
+                    next.GambleAnnounce = value;
+                    break;
+                case "gambleusage":
+                    next.GambleUsage = value;
+                    break;
+                case "gamblenotenough":
+                    next.GambleNotEnough = value;
+                    break;
+                case "gamblewait":
+                    next.GambleWait = value;
+                    break;
+                case "buymessage":
+                    next.BuyMessage = value;
+                    break;
+                case "buynotenough":
+                    next.BuyNotEnough = value;
+                    break;
+                case "buywait":
+                    next.BuyWait = value;
+                    break;
+                case "buyfailed":
+                    next.BuyFailed = value;
                     break;
                 case "hudtitle":
                     next.HudTitle = value.Length > 40 ? value.Substring(0, 40) : value;
@@ -652,8 +1021,77 @@ public class Feed : CovePlugin
         if (anyReplyLine)
             next.Replies = replies;
 
+        // shop lines replace the default extras (no valid line at all means the shop only has the meteor)
+        if (anyShopLine)
+            next.Extras = shopItems;
+        if (outcomes.Count > 0 && outcomes.Sum(o => o.Chance) > 0)
+        {
+            next.Outcomes = outcomes;
+            double total = outcomes.Sum(o => o.Chance);
+            double expected = outcomes.Sum(o => o.Chance / total * o.Multiplier);
+            Log($"Gamble: on average {expected * 100:0.#}% of every bet comes back.");
+        }
+        else if (outcomes.Count > 0)
+            Log("The gambleOutcome lines have no chance above 0, using the default outcomes.");
+
         settings = next;
         Log($"Loaded {SettingsFileName}.");
+    }
+
+    // shop = id | Label | price | action | cooldown seconds
+    private bool TryParseShopItem(string value, out ShopItem? item)
+    {
+        item = null;
+        string[] parts = value.Split('|').Select(p => p.Trim()).ToArray();
+        if (parts.Length < 4)
+        {
+            Log($"shop line \"{value}\" needs: id | Label | price | action | cooldown");
+            return false;
+        }
+
+        string id = parts[0].ToLowerInvariant();
+        if (id.Length == 0 || id == "meteor" || !id.All(c => char.IsAsciiLetterOrDigit(c) || c == '_'))
+        {
+            Log($"shop line \"{value}\": the id must be letters or numbers and cannot be meteor.");
+            return false;
+        }
+        if (!int.TryParse(parts[2], out int price) || price < 1)
+        {
+            Log($"shop line \"{value}\": the price must be a number, 1 or more.");
+            return false;
+        }
+        string action = parts[3].ToLowerInvariant();
+        if (action != "fish" && action != "raincloud" && action != "voidportal")
+        {
+            Log($"shop line \"{value}\": the action must be fish, raincloud or voidportal.");
+            return false;
+        }
+        int cooldown = 0;
+        if (parts.Length > 4 && (!int.TryParse(parts[4], out cooldown) || cooldown < 0))
+        {
+            Log($"shop line \"{value}\": the cooldown must be a number of seconds.");
+            return false;
+        }
+
+        item = new ShopItem { Id = id, Label = parts[1].Length > 0 ? parts[1] : id, Price = Math.Min(price, 100_000), Action = action, CooldownSeconds = Math.Min(cooldown, 86_400) };
+        return true;
+    }
+
+    // gambleOutcome = chance | multiplier | message
+    private bool TryParseOutcome(string value, out Outcome? outcome)
+    {
+        outcome = null;
+        string[] parts = value.Split('|', 3).Select(p => p.Trim()).ToArray();
+        if (parts.Length < 2
+            || !double.TryParse(parts[0], NumberStyles.Float, CultureInfo.InvariantCulture, out double chance) || chance < 0
+            || !double.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out double multiplier) || multiplier < 0)
+        {
+            Log($"gambleOutcome line \"{value}\" needs: chance | multiplier | message");
+            return false;
+        }
+
+        outcome = new Outcome { Chance = chance, Multiplier = Math.Min(multiplier, 1000), Label = parts.Length > 2 ? parts[2] : "" };
+        return true;
     }
 
     private void EnsureSettingsFileExists()
@@ -697,6 +1135,20 @@ public class Feed : CovePlugin
             "#  meteorCost           = coins a meteor costs.",
             "#  meteorCooldown       = seconds between meteors for the whole server, 0 for none.",
             "#                         Admins are not limited.",
+            "#  shop                 = an extra thing to buy, one line each: id | Label | price | action | cooldown",
+            "#                         action is fish, raincloud or voidportal. The cooldown is in seconds and",
+            "#                         is for the whole server. The meteor is always in the shop (see above).",
+            "#                         Players use !shop to see the list and !buy <id> to buy.",
+            "#  buyMessage / buyNotEnough / buyWait / buyFailed = the wording for the shop items,",
+            "#                         with %player% %item% %cost% %coins% %seconds%.",
+            "#",
+            "#  GAMBLING: !gamble <coins> (or !gamble all) rolls once. Each gambleOutcome line is",
+            "#  chance | multiplier | message. The bet is paid back times the multiplier, 0 loses it all.",
+            "#  The chances can be any numbers, they are compared with each other. Put gamble = off to",
+            "#  switch it off. In messages: %player% %bet% %won% %change% %coins% %label% %min% %max%.",
+            "#  gambleMin / gambleMax = smallest and biggest bet.  gambleCooldown = seconds between bets.",
+            "#  gambleAnnounceAt      = multiplier from which everybody is told (0 = never).",
+            "#  gambleResult / gambleAnnounce / gambleUsage / gambleNotEnough / gambleWait = wording.",
             "#  hudTitle             = the heading on the Wolfpark HUD mod's panel (up to 40 letters).",
             "#  hudTitleColor        = its colour as six hex digits, like 00FFFF.",
             "#  In the coin messages you can also use  %coins% (balance, like \"3 coins\"),",
@@ -720,6 +1172,21 @@ public class Feed : CovePlugin
             "coinsPerFeed = 1",
             "meteorCost = 10",
             "meteorCooldown = 30",
+            "shop = raincloud | Rain Cloud | 6 | raincloud | 30",
+            "shop = fish | Fish Shadow | 3 | fish | 10",
+            "# shop = voidportal | Void Portal | 25 | voidportal | 120",
+            "buyMessage = %player% bought a %item% for %cost%!",
+            "gamble = on",
+            "gambleMin = 1",
+            "gambleMax = 100",
+            "gambleCooldown = 3",
+            "gambleAnnounceAt = 10",
+            "gambleOutcome = 63 | 0 | The wolves ate your coins.",
+            "gambleOutcome = 27 | 2 | Doubled!",
+            "gambleOutcome = 8.5 | 3 | Tripled!",
+            "gambleOutcome = 1.5 | 10 | JACKPOT!",
+            "gambleResult = %label% (bet %bet%, %change%, you have %coins%)",
+            "gambleAnnounce = %player% hit the JACKPOT and won %won%!",
             "hudTitle = Ether's Wolf Park",
             "hudTitleColor = 00FFFF",
             "coinMessage = +%earned% (you have %coins%). A meteor costs %cost%, type !meteor when you have enough.",
