@@ -8,7 +8,9 @@ using Cove.Server.Plugins;
 /// times they have done it, followed by a howl. Counts are kept by Steam ID in feed-counts.json, so they survive
 /// restarts and name changes.
 ///
-///   !feed     feed the wolves
+///   !feed     feed the wolves, which also earns coins
+///   !coins    shows how many coins you have
+///   !meteor   spends coins to call down a meteor
 ///   !wolves   shows the top feeders and the server total
 ///
 /// The wording, the cooldown and the size of the top list are set in feed.txt in the server's root directory
@@ -32,17 +34,30 @@ public class Feed : CovePlugin
         public bool HungryToEveryone;
         public string WolvesSummary = "The wolves have been fed %total% times. You have fed them %count%.";
         public string NobodyFed = "Nobody has fed the wolves yet. Type !feed to be the first!";
+
+        // coins
+        public int CoinsPerFeed = 1;
+        public int MeteorCost = 10;
+        public int MeteorCooldownSeconds = 30;
+        public string CoinMessage = "+%earned% (you have %coins%). A meteor costs %cost%, type !meteor when you have enough.";
+        public string CoinsBalance = "You have %coins%. A meteor costs %cost%, feed the wolves with !feed to earn more.";
+        public string MeteorMessage = "%player% spent %cost% to call down a meteor!";
+        public string NotEnoughMessage = "A meteor costs %cost%, you have %coins%. Feed the wolves to earn more!";
+        public string MeteorWaitMessage = "A meteor was only just called, please wait %seconds% more second(s).";
+        public string MeteorFailedMessage = "The meteor could not be called right now, you were not charged.";
     }
 
     private sealed class Record
     {
         public string Name { get; set; } = "";
         public int Count { get; set; }
+        public int Coins { get; set; }
     }
 
     private readonly object sync = new();
     private readonly Dictionary<ulong, Record> counts = new();
     private readonly Dictionary<ulong, long> lastFed = new();
+    private long lastMeteorTick = long.MinValue / 2;
     private readonly Dictionary<ulong, long> hungryAt = new(); // when to tell a player the wolves are hungry again
     private string countsPath = "";
     private string settingsPath = "";
@@ -110,6 +125,40 @@ public class Feed : CovePlugin
             }
         );
         SetCommandDescription("wolves", "Shows who has fed the wolves the most");
+
+        RegisterCommand(
+            command: "coins",
+            aliases: [],
+            callback: (player, args) =>
+            {
+                try
+                {
+                    ShowCoins(player);
+                }
+                catch (Exception e)
+                {
+                    Log($"!coins failed: {e.Message}");
+                }
+            }
+        );
+        SetCommandDescription("coins", "Shows how many wolf coins you have");
+
+        RegisterCommand(
+            command: "meteor",
+            aliases: [],
+            callback: (player, args) =>
+            {
+                try
+                {
+                    BuyMeteor(player);
+                }
+                catch (Exception e)
+                {
+                    Log($"!meteor failed: {e.Message}");
+                }
+            }
+        );
+        SetCommandDescription("meteor", "Spend wolf coins to call down a meteor");
     }
 
     public override void onEnd()
@@ -122,6 +171,8 @@ public class Feed : CovePlugin
         }
         ParentServer.UnregisterCommand("feed");
         ParentServer.UnregisterCommand("wolves");
+        ParentServer.UnregisterCommand("coins");
+        ParentServer.UnregisterCommand("meteor");
     }
 
     // triggered 12 times a second by the server
@@ -206,10 +257,23 @@ public class Feed : CovePlugin
                    .Replace("%total%", total.ToString());
     }
 
+    // "1 coin", "10 coins"
+    private static string Coins(int amount) => amount == 1 ? "1 coin" : $"{amount} coins";
+
+    private static string FillCoins(string text, string player, int balance, Settings s, int earned = 0, int seconds = 0)
+    {
+        return text.Replace("%player%", player)
+                   .Replace("%coins%", Coins(balance))
+                   .Replace("%earned%", Coins(earned))
+                   .Replace("%cost%", Coins(s.MeteorCost))
+                   .Replace("%seconds%", seconds.ToString());
+    }
+
     private void FeedWolves(WFPlayer player)
     {
         ulong id = player.SteamId.m_SteamID;
         int mine;
+        int coins;
         long total;
         Settings s = GetSettings();
 
@@ -230,7 +294,9 @@ public class Feed : CovePlugin
                 counts[id] = record = new Record();
             record.Name = player.Username;
             record.Count++;
+            record.Coins += s.CoinsPerFeed;
             mine = record.Count;
+            coins = record.Coins;
             total = counts.Values.Sum(r => (long)r.Count);
 
             SaveCounts();
@@ -241,6 +307,79 @@ public class Feed : CovePlugin
             SendGlobalChatMessage(Fill(s.Replies[Random.Shared.Next(s.Replies.Count)], player.Username, times, mine, total));
         if (s.Howl.Length > 0)
             SendGlobalChatMessage(Fill(s.Howl, player.Username, times, mine, total));
+
+        if (s.CoinsPerFeed > 0 && s.CoinMessage.Length > 0)
+            SendPlayerChatMessage(player, FillCoins(s.CoinMessage, player.Username, coins, s, s.CoinsPerFeed));
+    }
+
+    private void ShowCoins(WFPlayer player)
+    {
+        Settings s = GetSettings();
+        int coins;
+        lock (sync)
+            coins = counts.TryGetValue(player.SteamId.m_SteamID, out Record? record) ? record.Coins : 0;
+
+        SendPlayerChatMessage(player, FillCoins(s.CoinsBalance, player.Username, coins, s));
+    }
+
+    private void BuyMeteor(WFPlayer player)
+    {
+        Settings s = GetSettings();
+        ulong id = player.SteamId.m_SteamID;
+        int coins;
+
+        lock (sync)
+        {
+            long now = Environment.TickCount64;
+            bool admin = IsPlayerAdmin(player);
+
+            // one meteor at a time for the whole server, so a few players can't fill the sky
+            if (!admin && s.MeteorCooldownSeconds > 0 && now - lastMeteorTick < s.MeteorCooldownSeconds * 1000L)
+            {
+                int wait = (int)Math.Ceiling((s.MeteorCooldownSeconds * 1000L - (now - lastMeteorTick)) / 1000.0);
+                SendPlayerChatMessage(player, FillCoins(s.MeteorWaitMessage, player.Username, 0, s, 0, wait));
+                return;
+            }
+
+            counts.TryGetValue(id, out Record? record);
+            coins = record?.Coins ?? 0;
+            if (record == null || record.Coins < s.MeteorCost)
+            {
+                SendPlayerChatMessage(player, FillCoins(s.NotEnoughMessage, player.Username, coins, s));
+                return;
+            }
+
+            // charge first, and give the coins back if the meteor can't be spawned
+            record.Coins -= s.MeteorCost;
+            coins = record.Coins;
+            lastMeteorTick = now;
+            SaveCounts();
+        }
+
+        try
+        {
+            ParentServer.spawnFish("fish_spawn_alien");
+        }
+        catch (Exception e)
+        {
+            lock (sync)
+            {
+                if (counts.TryGetValue(id, out Record? record))
+                {
+                    record.Coins += s.MeteorCost;
+                    coins = record.Coins;
+                }
+                lastMeteorTick = long.MinValue / 2;
+                SaveCounts();
+            }
+            Log($"Could not spawn a meteor for {player.Username}: {e.Message}");
+            SendPlayerChatMessage(player, s.MeteorFailedMessage);
+            return;
+        }
+
+        Log($"{player.Username} spent {s.MeteorCost} coins on a meteor.");
+        if (s.MeteorMessage.Length > 0)
+            SendGlobalChatMessage(FillCoins(s.MeteorMessage, player.Username, coins, s));
     }
 
     private void ShowTop(WFPlayer player)
@@ -319,6 +458,42 @@ public class Feed : CovePlugin
                 case "cooldownmessage":
                     next.CooldownMessage = value;
                     break;
+                case "coinsperfeed":
+                    if (int.TryParse(value, out int perFeed) && perFeed >= 0)
+                        next.CoinsPerFeed = Math.Min(perFeed, 1000);
+                    else
+                        Log("coinsPerFeed must be a number, 0 or more, using 1.");
+                    break;
+                case "meteorcost":
+                    if (int.TryParse(value, out int cost) && cost >= 1)
+                        next.MeteorCost = Math.Min(cost, 100_000);
+                    else
+                        Log("meteorCost must be a number, 1 or more, using 10.");
+                    break;
+                case "meteorcooldown":
+                    if (int.TryParse(value, out int meteorWait) && meteorWait >= 0)
+                        next.MeteorCooldownSeconds = Math.Min(meteorWait, 86_400);
+                    else
+                        Log("meteorCooldown must be a number of seconds, using 30.");
+                    break;
+                case "coinmessage":
+                    next.CoinMessage = value;
+                    break;
+                case "coinsbalance":
+                    next.CoinsBalance = value;
+                    break;
+                case "meteormessage":
+                    next.MeteorMessage = value;
+                    break;
+                case "notenoughmessage":
+                    next.NotEnoughMessage = value;
+                    break;
+                case "meteorwaitmessage":
+                    next.MeteorWaitMessage = value;
+                    break;
+                case "meteorfailedmessage":
+                    next.MeteorFailedMessage = value;
+                    break;
                 case "hungrymessage":
                     next.HungryMessage = value;
                     break;
@@ -373,6 +548,25 @@ public class Feed : CovePlugin
             "#  topCount         = how many players !wolves lists, 1 to 10.",
             "#  wolvesSummary    = the first line of !wolves, shown only to the player who typed it.",
             "#  nobodyFed        = what !wolves says before anybody has fed the wolves.",
+            "#",
+            "#  COINS",
+            "#  Every feed earns coins. !coins shows a player's balance and !meteor spends",
+            "#  coins to call down a meteor for everybody. The coins are kept by Steam ID",
+            "#  in feed-counts.json, next to the feed counts, and spending them does not",
+            "#  lower the feed count.",
+            "#  coinsPerFeed         = coins earned for each feed, 0 turns coins off.",
+            "#  meteorCost           = coins a meteor costs.",
+            "#  meteorCooldown       = seconds between meteors for the whole server, 0 for none.",
+            "#                         Admins are not limited.",
+            "#  In the coin messages you can also use  %coins% (balance, like \"3 coins\"),",
+            "#  %earned% (coins from this feed), %cost% (the meteor price) and %seconds%",
+            "#  (time left to wait). Leave a message empty to send nothing.",
+            "#  coinMessage          = told only to the player after each feed.",
+            "#  coinsBalance         = the answer to !coins.",
+            "#  meteorMessage        = said to everyone when a meteor is bought.",
+            "#  notEnoughMessage     = when a player can't afford a meteor.",
+            "#  meteorWaitMessage    = when another meteor was called too recently.",
+            "#  meteorFailedMessage  = if the meteor can't be spawned, the coins are given back.",
             "# ======================================================================",
             "",
             "reply = %player% fed the wolves. That's %times% so far!",
@@ -381,6 +575,16 @@ public class Feed : CovePlugin
             "cooldownMessage = The wolves are still eating, try again in a moment.",
             "hungryMessage = The wolves are getting hungry again...",
             "hungryTo = player",
+            "",
+            "coinsPerFeed = 1",
+            "meteorCost = 10",
+            "meteorCooldown = 30",
+            "coinMessage = +%earned% (you have %coins%). A meteor costs %cost%, type !meteor when you have enough.",
+            "coinsBalance = You have %coins%. A meteor costs %cost%, feed the wolves with !feed to earn more.",
+            "meteorMessage = %player% spent %cost% to call down a meteor!",
+            "notEnoughMessage = A meteor costs %cost%, you have %coins%. Feed the wolves to earn more!",
+            "meteorWaitMessage = A meteor was only just called, please wait %seconds% more second(s).",
+            "meteorFailedMessage = The meteor could not be called right now, you were not charged.",
             "",
             "topCount = 5",
             "wolvesSummary = The wolves have been fed %total% times. You have fed them %count%.",
