@@ -50,7 +50,10 @@ var gamble_ready_at = 0
 var title_text = ""
 var title_color = Color(0.0, 1.0, 1.0)
 var chat_color = ""
-var prev_title = ""
+var real_title = ""
+var lonely_on = false
+var published_title = ""
+var title_scan = 0.0
 var chat_connected = false
 
 
@@ -263,6 +266,11 @@ func _process(delta):
 		poll_timer = 0.0
 		_poll()
 		_sync_title()
+	_unwear_title()
+	title_scan += delta
+	if title_scan >= 0.25:
+		title_scan = 0.0
+		_watch_title_buttons()
 	_refresh()
 	# the game reads its keys before this node runs, so let go of its controls only after that
 	if pending_unlock:
@@ -371,10 +379,11 @@ func _rebuild_shop():
 
 
 # --- the Lonely title ---
-# A real title in the game's own list (Cosmetics > Misc). It is registered all the time, so the game can
-# show it on other players, but only handed out to the player while they are on the server.
-# Someone wearing it looks like a default character to players without this mod, so it is taken off
-# again when they leave the server or close the game.
+# A title only for this server, chosen from the game's own title list (Cosmetics, Misc tab).
+# The game sends every player's equipped cosmetics to everyone, and a player who does not know a cosmetic
+# sees that person as a default character. So the game is never allowed to see "Lonely" as the equipped
+# title: the mod notes the choice, puts the real title back, and tells the other mod users through the
+# Steam lobby (per-member data). Those players' name tags are then changed on their own screen.
 
 func _register_title():
 	var globals = get_node_or_null("/root/Globals")
@@ -408,10 +417,8 @@ func _grant_title():
 	_register_title()
 	if not data.cosmetics_unlocked.has(TITLE_ID):
 		data.cosmetics_unlocked.append(TITLE_ID)
-	var worn = data.cosmetics_equipped.get("title", "")
-	if worn != TITLE_ID and worn != prev_title:
-		prev_title = worn
-		_save_config()
+	_publish_title()
+	_apply_titles()
 
 
 func _revoke_title():
@@ -420,12 +427,100 @@ func _revoke_title():
 		return
 	if data.cosmetics_unlocked.has(TITLE_ID):
 		data.cosmetics_unlocked.erase(TITLE_ID)
-	if data.cosmetics_equipped.get("title", "") == TITLE_ID:
-		var globals = get_node_or_null("/root/Globals")
-		var back = prev_title
-		if back == "" or back == TITLE_ID or globals == null or not globals.cosmetic_data.has(back):
-			back = "title_rank_1"
-		data.cosmetics_equipped["title"] = back
+	_unwear_title()
+	if published_title != "" and steam != null:
+		var net = get_node_or_null("/root/Network")
+		if net != null and net.STEAM_LOBBY_ID > 0:
+			steam.setLobbyMemberData(net.STEAM_LOBBY_ID, "wp_title", "")
+		published_title = ""
+
+
+# runs every frame: whatever the menu just equipped, the game only ever sees a real title
+func _unwear_title():
+	var data = get_node_or_null("/root/PlayerData")
+	if data == null or not data.cosmetics_equipped.has("title"):
+		return
+	var worn = data.cosmetics_equipped["title"]
+	if worn == TITLE_ID:
+		if active:
+			lonely_on = true
+			_save_config()
+		data.cosmetics_equipped["title"] = _real_title()
+	elif real_title == "" or worn != real_title:
+		real_title = worn # the player picked another title (or this is the first time we look)
+
+
+func _real_title():
+	var globals = get_node_or_null("/root/Globals")
+	if real_title == "" or real_title == TITLE_ID or globals == null or not globals.cosmetic_data.has(real_title):
+		return "title_rank_1"
+	return real_title
+
+
+# the title buttons of the open menu: pressing one decides whether Lonely is on, and the highlight shows it
+func _watch_title_buttons():
+	var hud = _get_hud()
+	if hud == null:
+		return
+	var menu = hud.get_node_or_null("main/menu/tabs/outfit")
+	if menu == null:
+		return
+	var holder = menu.find_node("title_cont", true, false)
+	if holder == null:
+		return
+	for button in holder.get_children():
+		if not (button is Button) or button.get("saved_id") == null:
+			continue
+		if not button.has_meta("wp_watched"):
+			button.set_meta("wp_watched", true)
+			button.connect("pressed", self, "_on_title_button", [button.saved_id])
+		var mark = button.get_node_or_null("ColorRect")
+		if mark != null:
+			var wanted = (button.saved_id == TITLE_ID) if lonely_on else (button.saved_id == real_title)
+			mark.visible = wanted
+			button.modulate = Color(1, 1, 1) if not wanted else Color(0.95, 0.95, 0.9)
+
+
+func _on_title_button(id):
+	if id == TITLE_ID:
+		lonely_on = true
+	else:
+		lonely_on = false
+		real_title = id
+	_save_config()
+	_publish_title()
+	_apply_titles()
+
+
+func _publish_title():
+	var net = get_node_or_null("/root/Network")
+	if steam == null or net == null or net.STEAM_LOBBY_ID <= 0:
+		return
+	var want = TITLE_ID if lonely_on else ""
+	if want != published_title:
+		steam.setLobbyMemberData(net.STEAM_LOBBY_ID, "wp_title", want)
+		published_title = want
+
+
+# put "Lonely" under the names of the players who chose it (the game writes the title back
+# whenever someone changes their looks, so this is repeated)
+func _apply_titles():
+	var net = get_node_or_null("/root/Network")
+	if steam == null or net == null or net.STEAM_LOBBY_ID <= 0:
+		return
+	var lobby = net.STEAM_LOBBY_ID
+	var lonely_ids = []
+	for i in range(int(steam.getNumLobbyMembers(lobby))):
+		var member = steam.getLobbyMemberByIndex(lobby, i)
+		if str(steam.getLobbyMemberData(lobby, member, "wp_title")) == TITLE_ID:
+			lonely_ids.append(int(member))
+	for player in get_tree().get_nodes_in_group("player"):
+		if player.get("dead_actor") == true or player.get("owner_id") == null:
+			continue
+		if lonely_ids.has(int(player.owner_id)):
+			var label = player.title.get_node_or_null("VBoxContainer/Label2") if player.get("title") != null else null
+			if label != null and label.text != TITLE_NAME:
+				label.text = TITLE_NAME
 
 
 # --- server messages in colour ---
@@ -758,13 +853,13 @@ func _load_config():
 	file.close()
 	if typeof(data) == TYPE_DICTIONARY and data.has("x") and data.has("y"):
 		panel.rect_position = Vector2(float(data["x"]), float(data["y"]))
-	if typeof(data) == TYPE_DICTIONARY and data.has("prev_title"):
-		prev_title = str(data["prev_title"])
+	if typeof(data) == TYPE_DICTIONARY and data.has("lonely_on"):
+		lonely_on = bool(data["lonely_on"])
 
 
 func _save_config():
 	var file = File.new()
 	if file.open(CONFIG_PATH, File.WRITE) != OK:
 		return
-	file.store_string(to_json({"x": panel.rect_position.x, "y": panel.rect_position.y, "prev_title": prev_title}))
+	file.store_string(to_json({"x": panel.rect_position.x, "y": panel.rect_position.y, "lonely_on": lonely_on}))
 	file.close()

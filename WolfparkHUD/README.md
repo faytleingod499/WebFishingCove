@@ -30,4 +30,4 @@ with Godot 3.5 from this folder.
 
 ## Titles
 
-The mod adds a real title, **Lonely**, to the game's title list (Cosmetics, Misc tab) while you are on the server. It is taken off again when you leave the server or close the game. Players without this mod see someone wearing it as a default-looking character, because the game does not know the title.
+The mod adds a title, **Lonely**, to the game's title list (Cosmetics, Misc tab) while you are on the server. The game itself never sees it as your equipped title (players without the mod would see you as a default character), so it stays your real title for them. Players with the mod see "Lonely" under your name, passed along through the Steam lobby. Pick any other title to switch it off.

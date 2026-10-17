@@ -4,7 +4,7 @@
     "Metadata": {
         "Name": "Wolfpark HUD",
         "Author": "Fayt",
-        "Version": "1.8.0",
+        "Version": "1.9.0",
         "Description": "Shows your wolf coins, with Feed Wolves, Buy and Gamble controls. Only appears on servers running the Cove Feed plugin, does nothing anywhere else."
     }
 }
