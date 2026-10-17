@@ -28,6 +28,8 @@ public class Feed : CovePlugin
         public int CooldownSeconds = 3;
         public int TopCount = 5;
         public string CooldownMessage = "The wolves are still eating, try again in a moment.";
+        public string HungryMessage = "The wolves are getting hungry again...";
+        public bool HungryToEveryone;
         public string WolvesSummary = "The wolves have been fed %total% times. You have fed them %count%.";
         public string NobodyFed = "Nobody has fed the wolves yet. Type !feed to be the first!";
     }
@@ -41,6 +43,7 @@ public class Feed : CovePlugin
     private readonly object sync = new();
     private readonly Dictionary<ulong, Record> counts = new();
     private readonly Dictionary<ulong, long> lastFed = new();
+    private readonly Dictionary<ulong, long> hungryAt = new(); // when to tell a player the wolves are hungry again
     private string countsPath = "";
     private string settingsPath = "";
     private Settings settings = new();
@@ -113,7 +116,10 @@ public class Feed : CovePlugin
     {
         base.onEnd();
         lock (sync)
+        {
             running = false;
+            hungryAt.Clear();
+        }
         ParentServer.UnregisterCommand("feed");
         ParentServer.UnregisterCommand("wolves");
     }
@@ -121,26 +127,68 @@ public class Feed : CovePlugin
     // triggered 12 times a second by the server
     public override void onUpdate()
     {
+        var hungry = new List<ulong>();
+        Settings s;
+
         lock (sync)
         {
             if (!running)
                 return;
 
             long now = Environment.TickCount64;
-            if (now < nextReloadCheckTick)
-                return;
-            nextReloadCheckTick = now + ReloadCheckMs;
+            s = settings;
 
-            try
+            if (now >= nextReloadCheckTick)
             {
-                if (File.Exists(settingsPath) && File.GetLastWriteTimeUtc(settingsPath) != loadedWriteTime)
-                    ReloadSettings();
+                nextReloadCheckTick = now + ReloadCheckMs;
+                try
+                {
+                    if (File.Exists(settingsPath) && File.GetLastWriteTimeUtc(settingsPath) != loadedWriteTime)
+                    {
+                        ReloadSettings();
+                        s = settings;
+                    }
+                }
+                catch (Exception e)
+                {
+                    loadedWriteTime = DateTime.MinValue; // probably mid-save, try again at the next check
+                    Log($"Could not reload {SettingsFileName}: {e.Message}");
+                }
             }
-            catch (Exception e)
+
+            // players whose cooldown has just ended
+            foreach (var pair in hungryAt.ToList())
             {
-                loadedWriteTime = DateTime.MinValue; // probably mid-save, try again at the next check
-                Log($"Could not reload {SettingsFileName}: {e.Message}");
+                if (pair.Value > now)
+                    continue;
+                hungry.Add(pair.Key);
+                hungryAt.Remove(pair.Key);
             }
+        }
+
+        if (hungry.Count == 0 || s.HungryMessage.Length == 0)
+            return;
+
+        // sent outside of our lock
+        try
+        {
+            WFPlayer[] online = GetAllPlayers();
+            foreach (ulong id in hungry)
+            {
+                WFPlayer? who = online.FirstOrDefault(p => p.SteamId.m_SteamID == id);
+                if (who == null)
+                    continue; // they left in the meantime
+
+                string text = s.HungryMessage.Replace("%player%", who.Username);
+                if (s.HungryToEveryone)
+                    SendGlobalChatMessage(text);
+                else
+                    SendPlayerChatMessage(who, text);
+            }
+        }
+        catch (Exception e)
+        {
+            Log($"Could not send the hungry message: {e.Message}");
         }
     }
 
@@ -175,6 +223,8 @@ public class Feed : CovePlugin
                 return;
             }
             lastFed[id] = now;
+            if (s.CooldownSeconds > 0)
+                hungryAt[id] = now + s.CooldownSeconds * 1000L;
 
             if (!counts.TryGetValue(id, out Record? record))
                 counts[id] = record = new Record();
@@ -269,6 +319,12 @@ public class Feed : CovePlugin
                 case "cooldownmessage":
                     next.CooldownMessage = value;
                     break;
+                case "hungrymessage":
+                    next.HungryMessage = value;
+                    break;
+                case "hungryto":
+                    next.HungryToEveryone = value.Equals("everyone", StringComparison.OrdinalIgnoreCase);
+                    break;
                 case "wolvessummary":
                     next.WolvesSummary = value;
                     break;
@@ -311,6 +367,9 @@ public class Feed : CovePlugin
             "#  howl             = a second line sent right after the reply. Leave empty for none.",
             "#  cooldown         = seconds a player must wait between feeds, 0 for none.",
             "#  cooldownMessage  = what a player is told if they feed again too soon.",
+            "#  hungryMessage    = sent when a player's cooldown is over and they can feed the wolves",
+            "#                     again. Leave empty for none. Needs a cooldown above 0.",
+            "#  hungryTo         = player (only the one who fed them) or everyone.",
             "#  topCount         = how many players !wolves lists, 1 to 10.",
             "#  wolvesSummary    = the first line of !wolves, shown only to the player who typed it.",
             "#  nobodyFed        = what !wolves says before anybody has fed the wolves.",
@@ -320,6 +379,8 @@ public class Feed : CovePlugin
             "howl = Awooooooooo!",
             "cooldown = 3",
             "cooldownMessage = The wolves are still eating, try again in a moment.",
+            "hungryMessage = The wolves are getting hungry again...",
+            "hungryTo = player",
             "",
             "topCount = 5",
             "wolvesSummary = The wolves have been fed %total% times. You have fed them %count%.",
