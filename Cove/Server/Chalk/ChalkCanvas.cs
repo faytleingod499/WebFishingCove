@@ -79,6 +79,11 @@ namespace Cove.Server.Chalk
                     int size = CanvasSize;
                     if (size > 0 && (coords.x < 0 || coords.y < 0 || coords.x > size || coords.y > size))
                     {
+                        // Erasing chalk that is already stored outside the canvas (old data, or the check was off at the
+                        // time) is allowed and removes it. Nothing new is ever added there.
+                        if (color == (long)COLOR.NONE && chalkImage.Remove(coords))
+                            continue;
+
                         rejectedOutsideCanvas++;
                         continue;
                     }
