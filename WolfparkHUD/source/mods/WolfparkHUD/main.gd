@@ -383,10 +383,17 @@ func _register_title():
 	var globals = get_node_or_null("/root/Globals")
 	if globals == null or globals.cosmetic_data.has(TITLE_ID):
 		return
-	var script = load("res://Resources/Scripts/cosmetic_resource.gd")
-	if script == null:
-		return
-	var res = script.new()
+	# copy a title the game already has, so every field is exactly what the game (and other mods) expect
+	var res = null
+	for base in ["title_cozy", "title_rank_1"]:
+		if globals.cosmetic_data.has(base):
+			res = globals.cosmetic_data[base]["file"].duplicate()
+			break
+	if res == null:
+		var script = load("res://Resources/Scripts/cosmetic_resource.gd")
+		if script == null:
+			return
+		res = script.new()
 	res.name = TITLE_NAME
 	res.desc = "Only for Wolf Park."
 	res.title = TITLE_NAME
@@ -394,6 +401,7 @@ func _register_title():
 	res.cos_internal_id = 0
 	res.in_rotation = false
 	res.chest_reward = false
+	print("[WolfparkHUD] title registered: ", TITLE_ID, " text='", res.title, "'")
 	globals.cosmetic_data[TITLE_ID] = {"file": res}
 
 
