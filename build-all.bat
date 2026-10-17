@@ -7,7 +7,7 @@ rem Copy the files you want over your running server, keeping your own .cfg and 
 dotnet publish Cove\Cove.csproj -c Release -o dist
 if errorlevel 1 goto failed
 
-for %%P in (AutoMessages ChalkObserver ChalkPersist Feed Greetings ClearChalk DiscordBridge) do (
+for %%P in (AutoMessages ChalkObserver ChalkPersist ChatTriggers Feed Greetings ClearChalk DiscordBridge) do (
     dotnet build Cove.%%P -c Release -o dist\plugins
     if errorlevel 1 goto failed
 )
