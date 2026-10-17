@@ -6,7 +6,7 @@ extends Node
 # Your colours are shared through the Steam lobby, so other players who have this mod see your wolf
 # exactly as you made it. Players without the mod do not see pets at all. Works on any server.
 
-const VERSION = "1.0.0"
+const VERSION = "1.1.0"
 const CONFIG_PATH = "user://wolfpets.json"
 const MODEL_PATH = "res://mods/WolfPets/wolf_pet.scn"
 const SHADOW_PATH = "res://Scenes/Entities/Shadow/shadow.tscn"
@@ -14,14 +14,14 @@ const SYNC_KEY = "wolfpet"
 const POPUP_ID = "WOLFPETS"
 const DEFAULT_PAW_POS = Vector2(16, 140)
 
-const PET_SCALE = 0.45
-const FOLLOW_NEAR = 1.4    # stops when this close to its owner
-const FOLLOW_FAR = 2.1     # starts walking again when further than this
+const PET_SCALE = 0.82    # about 60% of a player's height
+const FOLLOW_NEAR = 2.1    # stops when this close to its owner
+const FOLLOW_FAR = 3.0     # starts walking again when further than this
+const MAX_PALETTES = 12
 const TELEPORT_DIST = 16.0 # this far behind it just appears next to its owner again
 const WALK_SPEED = 3.0
 const RUN_SPEED = 7.5
 const SIT_AFTER = 5.0      # seconds of standing still before it sits down
-const ANIM_STRIDE = 0.9    # how far one walk loop moves the full size model
 
 # the parts that can be coloured: key, label, the model's material for it
 const PARTS = [
@@ -67,6 +67,9 @@ var menu
 var show_box
 var pickers = {}
 var menu_open = false
+var palettes = {} # name -> colours, the player's own saved looks
+var name_field
+var palette_box
 var locked_hud = null
 var theme_applied = false
 
@@ -80,6 +83,7 @@ func _ready():
 	_reset_colors("Grey")
 	_build_ui()
 	_load_config()
+	_rebuild_palettes()
 	_apply_to_pickers()
 
 
@@ -247,7 +251,7 @@ func _make_pet(owner_node):
 			mats[base.resource_name] = own
 
 	# start next to its owner
-	var start = owner_node.global_transform.origin + Vector3(1.2, 0, 1.2)
+	var start = owner_node.global_transform.origin + Vector3(1.0, 0, 1.0).normalized() * FOLLOW_NEAR
 	node.global_transform.origin = _ground(node, start, owner_node.global_transform.origin.y)
 
 	var pet = {"node": node, "model": model, "anim": anim, "mats": mats, "owner": owner_node,
@@ -323,7 +327,8 @@ func _move_pet(pet, owner_node, delta):
 	# idle, walk, and sit after a while of standing still
 	if pet["speed"] > 0.35:
 		pet["still"] = 0.0
-		var rate = clamp(pet["speed"] / (ANIM_STRIDE * PET_SCALE * 2.2), 0.8, 2.8)
+		# the legs speed up with it, quicker still when it runs
+		var rate = clamp(0.6 + pet["speed"] * 0.45, 0.8, 4.2)
 		_play(pet, "wolf_walk", rate)
 	else:
 		pet["still"] += delta
@@ -442,6 +447,34 @@ func _build_ui():
 		grid.add_child(picker)
 		pickers[part[0]] = picker
 
+	# saving the current colours under a name
+	var save_row = HBoxContainer.new()
+	save_row.add_constant_override("separation", 6)
+	column.add_child(save_row)
+	name_field = LineEdit.new()
+	name_field.placeholder_text = "palette name"
+	name_field.max_length = 20
+	name_field.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	name_field.add_stylebox_override("normal", _glass(Color(0, 0, 0, 0.30), Color(0.55, 1.0, 1.0, 0.35), 8, 0))
+	name_field.add_stylebox_override("focus", _glass(Color(0, 0, 0, 0.40), Color(0.8, 1.0, 1.0, 0.9), 8, 0))
+	name_field.add_color_override("font_color", Color(1, 1, 1))
+	name_field.connect("text_entered", self, "_on_save_palette")
+	save_row.add_child(name_field)
+	var save = Button.new()
+	save.text = "Save"
+	save.focus_mode = Control.FOCUS_NONE
+	save.connect("pressed", self, "_on_save_palette")
+	_glass_button(save)
+	save_row.add_child(save)
+
+	var saved_label = Label.new()
+	saved_label.text = "My palettes"
+	saved_label.add_color_override("font_color", Color(0.75, 0.95, 1.0))
+	column.add_child(saved_label)
+	palette_box = VBoxContainer.new()
+	palette_box.add_constant_override("separation", 3)
+	column.add_child(palette_box)
+
 
 func _draw_paw():
 	var box = paw.rect_size
@@ -557,6 +590,85 @@ func _on_preset(name):
 	_apply_to_pickers()
 	sync_dirty = true
 	_save_config()
+
+
+func _on_save_palette(_text = ""):
+	var name = name_field.text.strip_edges()
+	if name == "":
+		name_field.placeholder_text = "type a name first"
+		return
+	if not palettes.has(name) and palettes.size() >= MAX_PALETTES:
+		name_field.text = ""
+		name_field.placeholder_text = "full, delete one first"
+		return
+	palettes[name] = colors.duplicate()
+	name_field.text = ""
+	name_field.placeholder_text = "palette name"
+	name_field.release_focus()
+	_rebuild_palettes()
+	_save_config()
+
+
+func _on_use_palette(name):
+	if not palettes.has(name):
+		return
+	for part in PARTS:
+		var text = str(palettes[name].get(part[0], ""))
+		if text.is_valid_html_color():
+			colors[part[0]] = text
+	name_field.text = name # so saving again updates it
+	_apply_to_pickers()
+	sync_dirty = true
+	_save_config()
+
+
+func _on_delete_palette(name):
+	palettes.erase(name)
+	_rebuild_palettes()
+	_save_config()
+
+
+# one row per saved palette: its colours as little swatches, its name, and a delete button
+func _rebuild_palettes():
+	if palette_box == null:
+		return
+	for child in palette_box.get_children():
+		palette_box.remove_child(child)
+		child.queue_free()
+	var names = palettes.keys()
+	names.sort()
+	if names.empty():
+		var none = Label.new()
+		none.text = "none saved yet"
+		none.add_color_override("font_color", Color(1, 1, 1, 0.5))
+		palette_box.add_child(none)
+	for name in names:
+		var row = HBoxContainer.new()
+		row.add_constant_override("separation", 4)
+		palette_box.add_child(row)
+		var use = Button.new()
+		use.text = name
+		use.clip_text = true
+		use.align = Button.ALIGN_LEFT
+		use.focus_mode = Control.FOCUS_NONE
+		use.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		use.connect("pressed", self, "_on_use_palette", [name])
+		_glass_button(use)
+		row.add_child(use)
+		for key in ["fur", "back", "belly", "eyes"]:
+			var swatch = ColorRect.new()
+			swatch.rect_min_size = Vector2(8, 18)
+			swatch.color = _color_of(palettes[name], key)
+			swatch.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			row.add_child(swatch)
+		var del = Button.new()
+		del.text = "x"
+		del.focus_mode = Control.FOCUS_NONE
+		del.connect("pressed", self, "_on_delete_palette", [name])
+		_glass_button(del)
+		row.add_child(del)
+	if menu_open:
+		call_deferred("_place_menu")
 
 
 func _on_color_changed(color, key):
@@ -677,6 +789,11 @@ func _load_config():
 		paw.rect_position = Vector2(float(data["x"]), float(data["y"]))
 	if data.has("show"):
 		show_pet = bool(data["show"])
+	if typeof(data.get("palettes")) == TYPE_DICTIONARY:
+		for name in data["palettes"].keys():
+			if typeof(data["palettes"][name]) == TYPE_DICTIONARY and palettes.size() < MAX_PALETTES:
+				palettes[str(name)] = data["palettes"][name]
+	_rebuild_palettes()
 	if typeof(data.get("colors")) == TYPE_DICTIONARY:
 		for part in PARTS:
 			var text = str(data["colors"].get(part[0], ""))
@@ -689,5 +806,5 @@ func _save_config():
 	var file = File.new()
 	if file.open(CONFIG_PATH, File.WRITE) != OK:
 		return
-	file.store_string(to_json({"x": paw.rect_position.x, "y": paw.rect_position.y, "show": show_pet, "colors": colors}))
+	file.store_string(to_json({"x": paw.rect_position.x, "y": paw.rect_position.y, "show": show_pet, "colors": colors, "palettes": palettes}))
 	file.close()

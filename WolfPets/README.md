@@ -15,6 +15,8 @@ Needs [GDWeave](https://github.com/NotNite/GDWeave). Copy the `WolfPets` folder 
   - **Show my wolf** turns your wolf on or off.
   - **Grey / White / Black** are ready-made looks.
   - Pick your own colour for the fur, back, belly & paws, eyes, nose & mouth, and ears & tongue.
+  - Type a name and press **Save** to keep the current colours as a palette (up to 12). Click a saved
+    palette to put it back on, or **x** to delete it. Saving under the same name updates it.
 - Your choice is saved and shared through the Steam lobby, so other players with this mod see your
   wolf in your colours. Players without the mod do not see pets.
 
