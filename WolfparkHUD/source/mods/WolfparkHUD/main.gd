@@ -99,13 +99,7 @@ func _build_ui():
 	column.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	margin.add_child(column)
 
-	title_label = Label.new()
-	title_label.align = Label.ALIGN_CENTER
-	title_label.visible = false
-	title_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	column.add_child(title_label)
-
-	# top: the drag grip, the coins and the times fed
+	# top: the drag grip, the title on the left, the coins and the times fed on the right
 	var row = HBoxContainer.new()
 	row.add_constant_override("separation", 10)
 	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -118,6 +112,13 @@ func _build_ui():
 	grip.hint_tooltip = "Drag to move"
 	grip.connect("gui_input", self, "_on_grip_input")
 	row.add_child(grip)
+
+	title_label = Label.new()
+	title_label.align = Label.ALIGN_LEFT
+	title_label.visible = false
+	title_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	title_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.add_child(title_label)
 
 	coin_label = Label.new()
 	coin_label.text = "Coins: 0"
