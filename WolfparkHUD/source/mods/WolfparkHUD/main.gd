@@ -7,8 +7,9 @@ extends Node
 # On such a server, anything you type that starts with ! goes only to the server and is not shown in chat.
 
 const CONFIG_PATH = "user://wolfparkhud.json"
-const TITLE_ID = "title_lonely"
 const TITLE_NAME = "Lonely"
+const LURE_TITLE_ID = "WolfparkHUD.lonely"
+const PLAIN_TITLE_ID = "title_lonely"
 const DEFAULT_POS = Vector2(16, 52)
 const FEED_DEBOUNCE_MS = 1500
 const BUY_DEBOUNCE_MS = 1500
@@ -50,6 +51,8 @@ var gamble_ready_at = 0
 var title_text = ""
 var title_color = Color(0.0, 1.0, 1.0)
 var chat_color = ""
+var TITLE_ID = "title_lonely"
+var lure_tries = 0
 var prev_title = ""
 var chat_connected = false
 
@@ -381,7 +384,21 @@ func _rebuild_shop():
 
 func _register_title():
 	var globals = get_node_or_null("/root/Globals")
-	if globals == null or globals.cosmetic_data.has(TITLE_ID):
+	if globals == null:
+		return
+	# With Lure (LureRefreshed) installed the title goes through Lure: it changes how name tags are drawn and
+	# swaps out any title it did not register itself for a blank one, which is what an unregistered title got.
+	var lure = get_node_or_null("/root/SulayreLure")
+	if lure != null and lure.has_method("add_content"):
+		if not globals.cosmetic_data.has(LURE_TITLE_ID) and lure_tries < 5:
+			lure_tries += 1
+			lure.add_content("WolfparkHUD", "lonely", "mod://titles/lonely.tres")
+		if globals.cosmetic_data.has(LURE_TITLE_ID):
+			TITLE_ID = LURE_TITLE_ID
+			return
+		if lure_tries < 5:
+			return # try again at the next poll, Lure may not be ready yet
+	if globals.cosmetic_data.has(TITLE_ID):
 		return
 	# copy a title the game already has, so every field is exactly what the game (and other mods) expect
 	var res = null
@@ -417,10 +434,11 @@ func _grant_title():
 	if data == null:
 		return
 	_register_title()
-	if not data.cosmetics_unlocked.has(TITLE_ID):
+	var globals = get_node_or_null("/root/Globals")
+	if globals != null and globals.cosmetic_data.has(TITLE_ID) and not data.cosmetics_unlocked.has(TITLE_ID):
 		data.cosmetics_unlocked.append(TITLE_ID)
 	var worn = data.cosmetics_equipped.get("title", "")
-	if worn != TITLE_ID and worn != prev_title:
+	if worn != PLAIN_TITLE_ID and worn != LURE_TITLE_ID and worn != prev_title:
 		prev_title = worn
 		_save_config()
 
@@ -429,12 +447,14 @@ func _revoke_title():
 	var data = get_node_or_null("/root/PlayerData")
 	if data == null:
 		return
-	if data.cosmetics_unlocked.has(TITLE_ID):
-		data.cosmetics_unlocked.erase(TITLE_ID)
-	if data.cosmetics_equipped.get("title", "") == TITLE_ID:
+	for id in [PLAIN_TITLE_ID, LURE_TITLE_ID]:
+		if data.cosmetics_unlocked.has(id):
+			data.cosmetics_unlocked.erase(id)
+	var worn_now = data.cosmetics_equipped.get("title", "")
+	if worn_now == PLAIN_TITLE_ID or worn_now == LURE_TITLE_ID:
 		var globals = get_node_or_null("/root/Globals")
 		var back = prev_title
-		if back == "" or back == TITLE_ID or globals == null or not globals.cosmetic_data.has(back):
+		if back == "" or back == PLAIN_TITLE_ID or back == LURE_TITLE_ID or globals == null or not globals.cosmetic_data.has(back):
 			back = "title_rank_1"
 		data.cosmetics_equipped["title"] = back
 

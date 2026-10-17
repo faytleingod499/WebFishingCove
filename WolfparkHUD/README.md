@@ -30,4 +30,6 @@ with Godot 3.5 from this folder.
 
 ## Titles
 
-The mod adds a real title, **Lonely**, to the game's title list (Cosmetics, Misc tab) while you are on the server. It is taken off again when you leave the server or close the game. Players without this mod see someone wearing it as a default-looking character, because the game does not know the title.
+The mod adds a title, **Lonely**, to the game's title list (Cosmetics, Misc tab) while you are on the server. It is taken off again when you leave the server or close the game.
+
+If **LureRefreshed** is installed the title is registered through Lure (as `WolfparkHUD.lonely`), which is what Lure needs to draw it, and players without the mod just get a blank title from Lure. Without Lure it is added to the game directly, and players without this mod see the wearer as a default-looking character.
