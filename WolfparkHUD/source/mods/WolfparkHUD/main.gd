@@ -44,16 +44,13 @@ var feed_cooldown_ms = 0
 var feed_bar_start = 0
 var feed_bar_end = 0
 var last_feeds = -1
-var no_entry_since = 0
+var feed_pressed_at = -100000
 var buy_ready_at = 0
 var gamble_ready_at = 0
 var title_text = ""
 var title_color = Color(0.0, 1.0, 1.0)
 var chat_color = ""
-var real_title = ""
-var lonely_on = false
-var published_title = ""
-var title_scan = 0.0
+var prev_title = ""
 var chat_connected = false
 
 
@@ -120,9 +117,9 @@ func _build_ui():
 	grip.text = "::"
 	grip.mouse_filter = Control.MOUSE_FILTER_STOP
 	grip.mouse_default_cursor_shape = Control.CURSOR_MOVE
-	grip.hint_tooltip = "Drag to move"
 	grip.connect("gui_input", self, "_on_grip_input")
 	row.add_child(grip)
+	_add_tooltip(grip, "Move", "Drag to move this window")
 
 	# the title, coins and fed count sit centred in the rest of the row
 	var info = HBoxContainer.new()
@@ -158,12 +155,12 @@ func _build_ui():
 	# the leaderboard icon: a little clipboard that runs !wolves
 	board_button = Button.new()
 	board_button.focus_mode = Control.FOCUS_NONE
-	board_button.hint_tooltip = "Leaderboard"
 	board_button.rect_min_size = Vector2(26, 22)
 	board_button.connect("pressed", self, "_on_board")
 	board_button.connect("draw", self, "_draw_clipboard")
 	_glass_button(board_button)
 	button_row.add_child(board_button)
+	_add_tooltip(board_button, "Leaderboard", "Who has fed the wolves the most")
 
 
 	feed_button = Button.new()
@@ -266,11 +263,6 @@ func _process(delta):
 		poll_timer = 0.0
 		_poll()
 		_sync_title()
-	_unwear_title()
-	title_scan += delta
-	if title_scan >= 0.25:
-		title_scan = 0.0
-		_watch_title_buttons()
 	_refresh()
 	# the game reads its keys before this node runs, so let go of its controls only after that
 	if pending_unlock:
@@ -299,7 +291,6 @@ func _poll():
 	if not was_active:
 		# just arrived on the server (or came back to it): forget the old feed count and cooldown
 		last_feeds = -1
-		no_entry_since = 0
 		feed_bar_end = 0
 		feed_bar_start = 0
 		feed_ready_at = 0
@@ -344,22 +335,26 @@ func _poll():
 		coins = 0
 		feeds = 0
 	# a feed just counted (from the button or typed), so the wolves are full for the cooldown.
-	# The first number we see for this player is only where they stood when they joined, never a feed.
+	# The first number we see for this player is only where they stood when they joined, never a feed,
+	# except when this player pressed feed a moment ago (a brand new player's very first feed).
+	var now = OS.get_ticks_msec()
 	if parts.size() < 2:
-		# a brand new player has no entry yet: if it is still missing after a few seconds, they simply have no feeds
-		if no_entry_since == 0:
-			no_entry_since = OS.get_ticks_msec()
-		elif last_feeds == -1 and OS.get_ticks_msec() - no_entry_since > 4000:
-			last_feeds = 0
+		pass
 	elif last_feeds == -1:
 		last_feeds = feeds
+		if feeds > 0 and now - feed_pressed_at < 6000:
+			_start_feed_bar(now)
 	elif feeds > last_feeds:
 		last_feeds = feeds
-		if feed_cooldown_ms > 0:
-			feed_bar_start = OS.get_ticks_msec()
-			feed_bar_end = feed_bar_start + feed_cooldown_ms
+		_start_feed_bar(now)
 	elif feeds < last_feeds:
 		last_feeds = feeds
+
+
+func _start_feed_bar(now):
+	if feed_cooldown_ms > 0:
+		feed_bar_start = now
+		feed_bar_end = now + feed_cooldown_ms
 
 
 func _rebuild_shop():
@@ -379,11 +374,10 @@ func _rebuild_shop():
 
 
 # --- the Lonely title ---
-# A title only for this server, chosen from the game's own title list (Cosmetics, Misc tab).
-# The game sends every player's equipped cosmetics to everyone, and a player who does not know a cosmetic
-# sees that person as a default character. So the game is never allowed to see "Lonely" as the equipped
-# title: the mod notes the choice, puts the real title back, and tells the other mod users through the
-# Steam lobby (per-member data). Those players' name tags are then changed on their own screen.
+# A real title in the game's own list (Cosmetics > Misc). It is registered all the time, so the game can
+# show it on other players, but only handed out to the player while they are on the server.
+# Someone wearing it looks like a default character to players without this mod, so it is taken off
+# again when they leave the server or close the game.
 
 func _register_title():
 	var globals = get_node_or_null("/root/Globals")
@@ -393,7 +387,7 @@ func _register_title():
 	if script == null:
 		return
 	var res = script.new()
-	res.name = TITLE_NAME + " Title"
+	res.name = TITLE_NAME
 	res.desc = "Only for Wolf Park."
 	res.title = TITLE_NAME
 	res.category = "title"
@@ -417,8 +411,10 @@ func _grant_title():
 	_register_title()
 	if not data.cosmetics_unlocked.has(TITLE_ID):
 		data.cosmetics_unlocked.append(TITLE_ID)
-	_publish_title()
-	_apply_titles()
+	var worn = data.cosmetics_equipped.get("title", "")
+	if worn != TITLE_ID and worn != prev_title:
+		prev_title = worn
+		_save_config()
 
 
 func _revoke_title():
@@ -427,100 +423,12 @@ func _revoke_title():
 		return
 	if data.cosmetics_unlocked.has(TITLE_ID):
 		data.cosmetics_unlocked.erase(TITLE_ID)
-	_unwear_title()
-	if published_title != "" and steam != null:
-		var net = get_node_or_null("/root/Network")
-		if net != null and net.STEAM_LOBBY_ID > 0:
-			steam.setLobbyMemberData(net.STEAM_LOBBY_ID, "wp_title", "")
-		published_title = ""
-
-
-# runs every frame: whatever the menu just equipped, the game only ever sees a real title
-func _unwear_title():
-	var data = get_node_or_null("/root/PlayerData")
-	if data == null or not data.cosmetics_equipped.has("title"):
-		return
-	var worn = data.cosmetics_equipped["title"]
-	if worn == TITLE_ID:
-		if active:
-			lonely_on = true
-			_save_config()
-		data.cosmetics_equipped["title"] = _real_title()
-	elif real_title == "" or worn != real_title:
-		real_title = worn # the player picked another title (or this is the first time we look)
-
-
-func _real_title():
-	var globals = get_node_or_null("/root/Globals")
-	if real_title == "" or real_title == TITLE_ID or globals == null or not globals.cosmetic_data.has(real_title):
-		return "title_rank_1"
-	return real_title
-
-
-# the title buttons of the open menu: pressing one decides whether Lonely is on, and the highlight shows it
-func _watch_title_buttons():
-	var hud = _get_hud()
-	if hud == null:
-		return
-	var menu = hud.get_node_or_null("main/menu/tabs/outfit")
-	if menu == null:
-		return
-	var holder = menu.find_node("title_cont", true, false)
-	if holder == null:
-		return
-	for button in holder.get_children():
-		if not (button is Button) or button.get("saved_id") == null:
-			continue
-		if not button.has_meta("wp_watched"):
-			button.set_meta("wp_watched", true)
-			button.connect("pressed", self, "_on_title_button", [button.saved_id])
-		var mark = button.get_node_or_null("ColorRect")
-		if mark != null:
-			var wanted = (button.saved_id == TITLE_ID) if lonely_on else (button.saved_id == real_title)
-			mark.visible = wanted
-			button.modulate = Color(1, 1, 1) if not wanted else Color(0.95, 0.95, 0.9)
-
-
-func _on_title_button(id):
-	if id == TITLE_ID:
-		lonely_on = true
-	else:
-		lonely_on = false
-		real_title = id
-	_save_config()
-	_publish_title()
-	_apply_titles()
-
-
-func _publish_title():
-	var net = get_node_or_null("/root/Network")
-	if steam == null or net == null or net.STEAM_LOBBY_ID <= 0:
-		return
-	var want = TITLE_ID if lonely_on else ""
-	if want != published_title:
-		steam.setLobbyMemberData(net.STEAM_LOBBY_ID, "wp_title", want)
-		published_title = want
-
-
-# put "Lonely" under the names of the players who chose it (the game writes the title back
-# whenever someone changes their looks, so this is repeated)
-func _apply_titles():
-	var net = get_node_or_null("/root/Network")
-	if steam == null or net == null or net.STEAM_LOBBY_ID <= 0:
-		return
-	var lobby = net.STEAM_LOBBY_ID
-	var lonely_ids = []
-	for i in range(int(steam.getNumLobbyMembers(lobby))):
-		var member = steam.getLobbyMemberByIndex(lobby, i)
-		if str(steam.getLobbyMemberData(lobby, member, "wp_title")) == TITLE_ID:
-			lonely_ids.append(int(member))
-	for player in get_tree().get_nodes_in_group("player"):
-		if player.get("dead_actor") == true or player.get("owner_id") == null:
-			continue
-		if lonely_ids.has(int(player.owner_id)):
-			var label = player.title.get_node_or_null("VBoxContainer/Label2") if player.get("title") != null else null
-			if label != null and label.text != TITLE_NAME:
-				label.text = TITLE_NAME
+	if data.cosmetics_equipped.get("title", "") == TITLE_ID:
+		var globals = get_node_or_null("/root/Globals")
+		var back = prev_title
+		if back == "" or back == TITLE_ID or globals == null or not globals.cosmetic_data.has(back):
+			back = "title_rank_1"
+		data.cosmetics_equipped["title"] = back
 
 
 # --- server messages in colour ---
@@ -657,6 +565,8 @@ var shop_open = false
 # Sends a message that only the server gets, in the same shape as a normal chat message so Cove reads it
 # as the command it is. Nothing is shown in your chat and nobody else receives it.
 func _say(text):
+	if text.strip_edges().to_lower() == "!feed":
+		feed_pressed_at = OS.get_ticks_msec()
 	if _send_hidden(text):
 		return
 	# could not do it quietly, so say it in chat like normal
@@ -666,6 +576,8 @@ func _say(text):
 
 
 func _send_hidden(text):
+	if text.strip_edges().to_lower() == "!feed":
+		feed_pressed_at = OS.get_ticks_msec()
 	if steam == null:
 		return false
 	var net = get_node_or_null("/root/Network")
@@ -699,8 +611,22 @@ func _send_hidden(text):
 
 
 func _on_feed():
+	feed_pressed_at = OS.get_ticks_msec()
 	feed_ready_at = OS.get_ticks_msec() + FEED_DEBOUNCE_MS
 	_say("!feed")
+
+
+# the game's own hover box (the one the backpack uses), so it looks and behaves like the rest of the game
+func _add_tooltip(control, header, body):
+	var scene = load("res://Scenes/Singletons/Tooltips/tooltip_node.tscn")
+	if scene == null or get_node_or_null("/root/Tooltip") == null:
+		control.hint_tooltip = header # no game tooltips here, the plain one will do
+		return
+	var tip = scene.instance()
+	tip.header = "[color=#6a4420]" + header + "[/color]"
+	tip.body = body
+	tip.mouse_filter = Control.MOUSE_FILTER_PASS
+	control.add_child(tip)
 
 
 func _on_board():
@@ -853,13 +779,13 @@ func _load_config():
 	file.close()
 	if typeof(data) == TYPE_DICTIONARY and data.has("x") and data.has("y"):
 		panel.rect_position = Vector2(float(data["x"]), float(data["y"]))
-	if typeof(data) == TYPE_DICTIONARY and data.has("lonely_on"):
-		lonely_on = bool(data["lonely_on"])
+	if typeof(data) == TYPE_DICTIONARY and data.has("prev_title"):
+		prev_title = str(data["prev_title"])
 
 
 func _save_config():
 	var file = File.new()
 	if file.open(CONFIG_PATH, File.WRITE) != OK:
 		return
-	file.store_string(to_json({"x": panel.rect_position.x, "y": panel.rect_position.y, "lonely_on": lonely_on}))
+	file.store_string(to_json({"x": panel.rect_position.x, "y": panel.rect_position.y, "prev_title": prev_title}))
 	file.close()
