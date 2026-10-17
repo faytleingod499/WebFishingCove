@@ -6,7 +6,7 @@ using Cove.Server.Plugins;
 
 /// <summary>
 /// Watches chat for words or phrases and answers with a message you choose, for example somebody saying
-/// "discord" gets your invite link. Rules are written in chattriggers.txt in the server's root directory
+/// "discord" gets your invite link. A rule can also kick or ban whoever says it (never admins). Rules are written in chattriggers.txt in the server's root directory
 /// (next to server.cfg), which is created on first start and reloads about 10 seconds after it is saved.
 /// </summary>
 public class ChatTriggers : CovePlugin
@@ -19,6 +19,8 @@ public class ChatTriggers : CovePlugin
 
     private enum Scope { All, Global, Local }
 
+    private enum RuleAction { Reply, Kick, Ban }
+
     private class Rule
     {
         public int Number;
@@ -28,6 +30,8 @@ public class ChatTriggers : CovePlugin
         public bool ToEveryone;
         public int CooldownSeconds = DefaultCooldownSeconds;
         public Scope Scope;
+        public RuleAction Action;
+        public string Reason = "";
     }
 
     private class Outgoing
@@ -88,6 +92,8 @@ public class ChatTriggers : CovePlugin
         if (message.StartsWith("!") || message.Trim().Length == 0)
             return;
 
+        var actions = new List<Rule>();
+
         lock (sync)
         {
             if (!running || rules.Count == 0)
@@ -116,7 +122,12 @@ public class ChatTriggers : CovePlugin
                 // a reply to everyone has one cooldown for the whole server, a private reply one per player,
                 // otherwise a few people saying the word at once would flood the chat
                 var key = (rule.Number, rule.ToEveryone ? 0UL : id);
-                if (lastFired.TryGetValue(key, out long last) && now - last < rule.CooldownSeconds * 1000L)
+                bool coolingDown = lastFired.TryGetValue(key, out long last) && now - last < rule.CooldownSeconds * 1000L;
+
+                // a kick or ban always happens, the cooldown only keeps the replies from repeating
+                if (rule.Action != RuleAction.Reply)
+                    actions.Add(rule);
+                if (coolingDown)
                     continue;
                 lastFired[key] = now;
 
@@ -131,6 +142,38 @@ public class ChatTriggers : CovePlugin
                     });
                 }
             }
+        }
+
+        // done outside our lock, like the built in !kick and !ban commands
+        foreach (Rule rule in actions)
+            Punish(sender, rule, message);
+    }
+
+    private void Punish(WFPlayer player, Rule rule, string message)
+    {
+        try
+        {
+            // admins and the host are never punished, a typo in a rule must not be able to remove them
+            if (ParentServer.isPlayerAdmin(player.SteamId))
+                return;
+
+            string reason = rule.Reason.Length > 0 ? rule.Reason : $"Said \"{rule.Phrases}\" (chat trigger {rule.Number})";
+
+            if (rule.Action == RuleAction.Ban)
+            {
+                bool alreadyBanned = ParentServer.isPlayerBanned(player.SteamId);
+                ParentServer.banPlayer(player.SteamId, !alreadyBanned, reason);
+                Log($"Banned {player.Username} ({player.SteamId.m_SteamID}) with rule {rule.Number}. They said: {message}");
+            }
+            else
+            {
+                ParentServer.kickPlayer(player.SteamId);
+                Log($"Kicked {player.Username} ({player.SteamId.m_SteamID}) with rule {rule.Number}. They said: {message}");
+            }
+        }
+        catch (Exception e)
+        {
+            Log($"Rule {rule.Number} could not {rule.Action.ToString().ToLowerInvariant()} {player.Username}: {e.Message}");
         }
     }
 
@@ -241,7 +284,18 @@ public class ChatTriggers : CovePlugin
         var phrases = Get("match").Split('|', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries).ToList();
         var replies = entries.Where(e => e.Key == "reply" && e.Value.Length > 0).Select(e => e.Value).Take(MaxReplies).ToList();
 
-        if (phrases.Count == 0 || replies.Count == 0)
+        string actionText = Get("action").ToLowerInvariant();
+        RuleAction action = actionText switch
+        {
+            "kick" => RuleAction.Kick,
+            "ban" => RuleAction.Ban,
+            _ => RuleAction.Reply,
+        };
+        if (actionText.Length > 0 && actionText != "reply" && actionText != "kick" && actionText != "ban")
+            Log($"Rule {number}: action must be reply, kick or ban, using reply.");
+
+        // a kick or ban does not need a reply, a plain reply rule does
+        if (phrases.Count == 0 || (replies.Count == 0 && action == RuleAction.Reply))
         {
             Log($"Rule {number} needs a match and at least one reply, so it is skipped.");
             return null;
@@ -291,6 +345,8 @@ public class ChatTriggers : CovePlugin
             ToEveryone = !Get("to").Equals("player", StringComparison.OrdinalIgnoreCase),
             CooldownSeconds = cooldown,
             Scope = scope,
+            Action = action,
+            Reason = Get("reason"),
         };
     }
 
@@ -322,6 +378,13 @@ public class ChatTriggers : CovePlugin
             "#    wholeWord  = true (default) only matches whole words, so \"disc\" does not",
             "#                 trigger on \"discard\". false matches inside words too.",
             "#    chat       = all (default), global or local. Which kind of chat counts.",
+            "#    action     = reply (default), kick or ban. Kick or ban whoever says it.",
+            "#                 Admins and the host are never kicked or banned. A ban is",
+            "#                 permanent and saved in bans.txt. With kick or ban the reply",
+            "#                 lines are optional, use them to announce it. Try a kick first,",
+            "#                 and keep wholeWord = true so a word inside another word",
+            "#                 can't catch an innocent player.",
+            "#    reason     = optional, written in bans.txt next to a ban.",
             "#",
             "#  In a reply you can use:",
             "#    %player%   the name of the person who said it",
@@ -341,6 +404,11 @@ public class ChatTriggers : CovePlugin
             "# reply = Join our Discord: https://discord.gg/yourcode",
             "# to = everyone",
             "# cooldown = 60",
+            "",
+            "# [rule]",
+            "# match = some bad word",
+            "# action = kick",
+            "# reply = A player was removed for breaking the chat rules.",
             "",
             "# [rule]",
             "# match = rules | how do i play",
