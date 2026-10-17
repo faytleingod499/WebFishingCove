@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using Cove.GodotFormat;
 using Cove.Server;
@@ -6,8 +7,10 @@ using Cove.Server.Plugins;
 
 /// <summary>
 /// Watches chat for words or phrases and answers with a message you choose, for example somebody saying
-/// "discord" gets your invite link. A rule can also kick or ban whoever says it (never admins). Rules are written in chattriggers.txt in the server's root directory
-/// (next to server.cfg), which is created on first start and reloads about 10 seconds after it is saved.
+/// "discord" gets your invite link. A rule can also kick or ban whoever says it (never admins), and it can count
+/// how many times a player has set it off and only act on the Nth time, warning them before that. Rules are written
+/// in chattriggers.txt in the server's root directory (next to server.cfg), which is created on first start and
+/// reloads about 10 seconds after it is saved. The strike counts are kept in chattriggers-strikes.json.
 /// </summary>
 public class ChatTriggers : CovePlugin
 {
@@ -16,6 +19,8 @@ public class ChatTriggers : CovePlugin
     private const int MaxReplies = 5;
     private const int DefaultCooldownSeconds = 30;
     private const long ReloadCheckMs = 10_000;
+    private const string StrikesFileName = "chattriggers-strikes.json";
+    private const int MaxStrikes = 100;
 
     private enum Scope { All, Global, Local }
 
@@ -32,6 +37,19 @@ public class ChatTriggers : CovePlugin
         public Scope Scope;
         public RuleAction Action;
         public string Reason = "";
+
+        // strikes: the action only happens on the Nth time, before that the replies are warnings
+        public string Key = "";
+        public int Strikes = 1;
+        public List<string> FinalReplies = new();
+        public int ExpiresMinutes;
+        public bool KeepAfterAction;
+    }
+
+    private sealed class StrikeRecord
+    {
+        public int Count { get; set; }
+        public DateTime Last { get; set; } = DateTime.UtcNow;
     }
 
     private class Outgoing
@@ -45,6 +63,8 @@ public class ChatTriggers : CovePlugin
     private List<Rule> rules = new();
     private readonly Dictionary<(int Rule, ulong Player), long> lastFired = new();
     private readonly List<Outgoing> queue = new();
+    private readonly Dictionary<(string Rule, ulong Player), StrikeRecord> strikes = new();
+    private string strikesPath = "";
     private string filePath = "";
     private DateTime loadedWriteTime = DateTime.MinValue;
     private long nextReloadCheckTick;
@@ -56,6 +76,7 @@ public class ChatTriggers : CovePlugin
     {
         base.onInit();
         filePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, FileName);
+        strikesPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, StrikesFileName);
 
         lock (sync)
         {
@@ -68,14 +89,33 @@ public class ChatTriggers : CovePlugin
             {
                 Log($"Could not load {FileName}: {e.Message}");
             }
+            LoadStrikes();
             nextReloadCheckTick = Environment.TickCount64 + ReloadCheckMs;
             running = true;
         }
+
+        RegisterCommand(
+            command: "strikes",
+            aliases: [],
+            callback: (player, args) => Safely(player, "strikes", () => ShowStrikes(player, args))
+        );
+        SetCommandDescription("strikes", "Shows the chat trigger strikes of a player, or of everybody | Usage: !strikes [player]");
+        SetCommandAccess("strikes", CommandAccess.Admin);
+
+        RegisterCommand(
+            command: "clearstrikes",
+            aliases: [],
+            callback: (player, args) => Safely(player, "clearstrikes", () => ClearStrikes(player, args))
+        );
+        SetCommandDescription("clearstrikes", "Resets the chat trigger strikes of a player | Usage: !clearstrikes <player>");
+        SetCommandAccess("clearstrikes", CommandAccess.Admin);
     }
 
     public override void onEnd()
     {
         base.onEnd();
+        ParentServer.UnregisterCommand("strikes");
+        ParentServer.UnregisterCommand("clearstrikes");
         lock (sync)
         {
             running = false;
@@ -119,6 +159,13 @@ public class ChatTriggers : CovePlugin
                 if (!matched)
                     continue;
 
+                // a rule with strikes counts every time, and warns instead of using the cooldown
+                if (rule.Strikes > 1)
+                {
+                    CountStrike(rule, sender, message, actions);
+                    continue;
+                }
+
                 // a reply to everyone has one cooldown for the whole server, a private reply one per player,
                 // otherwise a few people saying the word at once would flood the chat
                 var key = (rule.Number, rule.ToEveryone ? 0UL : id);
@@ -135,9 +182,7 @@ public class ChatTriggers : CovePlugin
                 {
                     queue.Add(new Outgoing
                     {
-                        Text = reply.Replace("%player%", sender.Username)
-                                    .Replace("%count%", GetAllPlayers().Length.ToString())
-                                    .Replace("%message%", message),
+                        Text = Fill(reply, sender, message),
                         OnlyTo = rule.ToEveryone ? null : id,
                     });
                 }
@@ -147,6 +192,55 @@ public class ChatTriggers : CovePlugin
         // done outside our lock, like the built in !kick and !ban commands
         foreach (Rule rule in actions)
             Punish(sender, rule, message);
+    }
+
+    private string Fill(string text, WFPlayer sender, string message, int strike = 0, int limit = 0)
+    {
+        return text.Replace("%player%", sender.Username)
+                   .Replace("%count%", GetAllPlayers().Length.ToString())
+                   .Replace("%message%", message)
+                   .Replace("%strike%", strike.ToString())
+                   .Replace("%strikes%", limit.ToString())
+                   .Replace("%left%", Math.Max(0, limit - strike).ToString());
+    }
+
+    // called with the lock held
+    private void CountStrike(Rule rule, WFPlayer sender, string message, List<Rule> actions)
+    {
+        ulong id = sender.SteamId.m_SteamID;
+        DateTime now = DateTime.UtcNow;
+
+        if (!strikes.TryGetValue((rule.Key, id), out StrikeRecord? record))
+            strikes[(rule.Key, id)] = record = new StrikeRecord();
+        else if (rule.ExpiresMinutes > 0 && now - record.Last > TimeSpan.FromMinutes(rule.ExpiresMinutes))
+            record.Count = 0; // old strikes run out
+
+        record.Count++;
+        record.Last = now;
+
+        int strike = record.Count;
+        bool last = strike >= rule.Strikes;
+        List<string> lines = last && rule.FinalReplies.Count > 0 ? rule.FinalReplies : rule.Replies;
+
+        foreach (string line in lines)
+        {
+            queue.Add(new Outgoing
+            {
+                Text = Fill(line, sender, message, strike, rule.Strikes),
+                OnlyTo = rule.ToEveryone ? null : sender.SteamId.m_SteamID,
+            });
+        }
+
+        if (last)
+        {
+            if (rule.Action != RuleAction.Reply)
+                actions.Add(rule);
+            if (!rule.KeepAfterAction)
+                record.Count = 0;
+        }
+
+        Log($"{sender.Username} set off \"{rule.Key}\": strike {strike} of {rule.Strikes}{(last ? ", the limit" : "")}.");
+        SaveStrikes();
     }
 
     private void Punish(WFPlayer player, Rule rule, string message)
@@ -336,8 +430,34 @@ public class ChatTriggers : CovePlugin
             _ => Scope.All,
         };
 
+        string name = Get("name").Trim();
+        int strikeLimit = 1;
+        if (Get("strikes").Length > 0)
+        {
+            if (int.TryParse(Get("strikes"), out int parsedStrikes) && parsedStrikes >= 1)
+                strikeLimit = Math.Min(parsedStrikes, MaxStrikes);
+            else
+                Log($"Rule {number}: strikes must be a whole number from 1 up, using 1.");
+        }
+        if (strikeLimit > 1 && name.Length == 0)
+            Log($"Rule {number} counts strikes but has no name. Add a  name = ...  line, or its counts will be lost if the rules are moved around.");
+
+        int expires = 0;
+        if (Get("strikeexpires").Length > 0)
+        {
+            if (int.TryParse(Get("strikeexpires"), out int parsedExpires) && parsedExpires >= 0)
+                expires = Math.Min(parsedExpires, 525_600);
+            else
+                Log($"Rule {number}: strikeExpires must be a number of minutes, using 0 (never).");
+        }
+
         return new Rule
         {
+            Key = name.Length > 0 ? name.ToLowerInvariant() : $"rule{number}",
+            Strikes = strikeLimit,
+            FinalReplies = entries.Where(e => e.Key == "finalreply" && e.Value.Length > 0).Select(e => e.Value).Take(MaxReplies).ToList(),
+            ExpiresMinutes = expires,
+            KeepAfterAction = Get("afteraction").Equals("keep", StringComparison.OrdinalIgnoreCase),
             Number = number,
             Pattern = regex,
             Phrases = string.Join(" | ", phrases),
@@ -348,6 +468,156 @@ public class ChatTriggers : CovePlugin
             Action = action,
             Reason = Get("reason"),
         };
+    }
+
+    // ---- strikes ----
+
+    private void Safely(WFPlayer player, string command, Action run)
+    {
+        try
+        {
+            run();
+        }
+        catch (Exception e)
+        {
+            Log($"!{command} failed: {e.Message}");
+            SendPlayerChatMessage(player, "Something went wrong, see the server log.");
+        }
+    }
+
+    // a player who is online by name or fisher ID, or any Steam ID
+    private bool TryFindPlayer(string ident, out ulong steamId, out string name)
+    {
+        steamId = 0;
+        name = ident;
+
+        WFPlayer? found = ParentServer.GetPlayer(ident);
+        if (found != null)
+        {
+            steamId = found.SteamId.m_SteamID;
+            name = found.Username;
+            return true;
+        }
+
+        if (ulong.TryParse(ident, out steamId) && steamId > 0)
+        {
+            name = GetAllPlayers().FirstOrDefault(p => p.SteamId.m_SteamID == steamId)?.Username ?? ident;
+            return true;
+        }
+        return false;
+    }
+
+    private void ShowStrikes(WFPlayer player, string[] args)
+    {
+        string ident = string.Join(" ", args).Trim();
+        ulong only = 0;
+        string who = "";
+
+        if (ident.Length > 0 && !TryFindPlayer(ident, out only, out who))
+        {
+            SendPlayerChatMessage(player, $"No player called \"{ident}\" is online. Use their Steam ID instead.");
+            return;
+        }
+
+        var lines = new List<string>();
+        lock (sync)
+        {
+            DateTime now = DateTime.UtcNow;
+            foreach (var entry in strikes.OrderBy(e => e.Key.Player).ThenBy(e => e.Key.Rule))
+            {
+                if (only != 0 && entry.Key.Player != only)
+                    continue;
+
+                Rule? rule = rules.FirstOrDefault(r => r.Key == entry.Key.Rule);
+                if (rule == null || entry.Value.Count == 0)
+                    continue; // the rule was removed, or the count was reset
+                if (rule.ExpiresMinutes > 0 && now - entry.Value.Last > TimeSpan.FromMinutes(rule.ExpiresMinutes))
+                    continue; // run out
+
+                string name = GetAllPlayers().FirstOrDefault(p => p.SteamId.m_SteamID == entry.Key.Player)?.Username ?? entry.Key.Player.ToString();
+                lines.Add($"{name}: {rule.Key} {entry.Value.Count}/{rule.Strikes}");
+            }
+        }
+
+        if (lines.Count == 0)
+        {
+            SendPlayerChatMessage(player, only == 0 ? "Nobody has any strikes." : $"{who} has no strikes.");
+            return;
+        }
+        SendPlayerChatMessage(player, "Strikes:\n" + string.Join("\n", lines.Take(15)) + (lines.Count > 15 ? $"\nand {lines.Count - 15} more" : ""));
+    }
+
+    private void ClearStrikes(WFPlayer player, string[] args)
+    {
+        string ident = string.Join(" ", args).Trim();
+        if (ident.Length == 0 || !TryFindPlayer(ident, out ulong steamId, out string who))
+        {
+            SendPlayerChatMessage(player, ident.Length == 0 ? "Usage: !clearstrikes <player>" : $"No player called \"{ident}\" is online. Use their Steam ID instead.");
+            return;
+        }
+
+        int cleared;
+        lock (sync)
+        {
+            var keys = strikes.Keys.Where(k => k.Player == steamId).ToList();
+            foreach (var key in keys)
+                strikes.Remove(key);
+            cleared = keys.Count;
+            if (cleared > 0)
+                SaveStrikes();
+        }
+
+        Log($"{player.Username} cleared the strikes of {who} ({steamId}).");
+        SendPlayerChatMessage(player, cleared == 0 ? $"{who} has no strikes." : $"Cleared the strikes of {who}.");
+    }
+
+    // called with the lock held, the file is small
+    private void SaveStrikes()
+    {
+        try
+        {
+            var data = new Dictionary<string, Dictionary<ulong, StrikeRecord>>();
+            foreach (var entry in strikes)
+            {
+                if (entry.Value.Count == 0)
+                    continue;
+                if (!data.TryGetValue(entry.Key.Rule, out var perPlayer))
+                    data[entry.Key.Rule] = perPlayer = new Dictionary<ulong, StrikeRecord>();
+                perPlayer[entry.Key.Player] = entry.Value;
+            }
+
+            string temp = strikesPath + ".tmp";
+            File.WriteAllText(temp, JsonSerializer.Serialize(data, new JsonSerializerOptions { WriteIndented = true }));
+            File.Move(temp, strikesPath, overwrite: true);
+        }
+        catch (Exception e)
+        {
+            Log($"Could not save {StrikesFileName}: {e.Message}");
+        }
+    }
+
+    private void LoadStrikes()
+    {
+        strikes.Clear();
+        try
+        {
+            if (!File.Exists(strikesPath))
+                return;
+
+            var data = JsonSerializer.Deserialize<Dictionary<string, Dictionary<ulong, StrikeRecord>>>(File.ReadAllText(strikesPath));
+            if (data == null)
+                return;
+            foreach (var rule in data)
+                foreach (var player in rule.Value)
+                    strikes[(rule.Key, player.Key)] = player.Value;
+        }
+        catch (Exception e)
+        {
+            // keep the unreadable file so nobody's strikes are lost, and start fresh
+            Log($"Could not read {StrikesFileName}: {e.Message}");
+            try { File.Move(strikesPath, strikesPath + ".broken-" + DateTime.UtcNow.ToString("yyyyMMddHHmmss")); }
+            catch { /* nothing more we can do */ }
+        }
     }
 
     private void EnsureFileExists()
@@ -386,6 +656,25 @@ public class ChatTriggers : CovePlugin
             "#                 can't catch an innocent player.",
             "#    reason     = optional, written in bans.txt next to a ban.",
             "#",
+            "#  STRIKES: count how many times a player sets a rule off, and only act on the Nth",
+            "#  time. Before that, the reply lines are warnings.",
+            "#    name         = a name for the rule, like  name = swearing . Use it on every rule with",
+            "#                   strikes, the counts are saved under it (in chattriggers-strikes.json).",
+            "#    strikes      = how many times before the action, default 1 (no counting). With 3,",
+            "#                   the first two are warnings and the third kicks or bans. A player's",
+            "#                   count is kept across restarts and when they leave and come back.",
+            "#                   Rules with strikes ignore cooldown, every time counts.",
+            "#    finalReply   = optional. Said on the last strike instead of the reply lines.",
+            "#                   Up to 5 lines, like reply.",
+            "#    strikeExpires = minutes without a new strike before the count starts over,",
+            "#                   default 0 (never).",
+            "#    afterAction  = reset (default) or keep. After the action the count starts over, or",
+            "#                   with keep the player is acted on again the next time they set it off.",
+            "#  In replies you can also use %strike% (which one this is), %strikes% (the limit) and",
+            "#  %left% (how many are left before the action).",
+            "#  Admins see the warnings and are counted but are never kicked or banned.",
+            "#  !strikes [player] shows the counts and !clearstrikes <player> forgives them.",
+            "#",
             "#  In a reply you can use:",
             "#    %player%   the name of the person who said it",
             "#    %count%    how many players are online",
@@ -406,9 +695,14 @@ public class ChatTriggers : CovePlugin
             "# cooldown = 60",
             "",
             "# [rule]",
-            "# match = some bad word",
+            "# name = swearing",
+            "# match = some bad word | another bad word",
+            "# strikes = 3",
             "# action = kick",
-            "# reply = A player was removed for breaking the chat rules.",
+            "# to = player",
+            "# reply = Please watch your language, %player%. Strike %strike% of %strikes%.",
+            "# finalReply = That was strike %strike%, you have been removed from the server.",
+            "# strikeExpires = 1440",
             "",
             "# [rule]",
             "# match = rules | how do i play",
