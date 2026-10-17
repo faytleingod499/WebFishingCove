@@ -15,6 +15,9 @@ using Cove.Server.Plugins;
 ///   !chalkload &lt;name&gt; &lt;0-3&gt;     replaces that canvas with one of your saves
 ///   !chalklist                  lists your saves
 ///   !chalkdelete &lt;name&gt;         deletes one of your saves
+///   !chalkshare &lt;name&gt; &lt;player&gt;  offers a copy of one of your saves to a player who is online
+///   !chalkaccept [new name]     takes the copy that was offered to you
+///   !chalkdecline               turns the offer down
 ///
 /// Admins can add a player (name or Steam ID) to the end of any of these to use that player's saves.
 ///
@@ -31,6 +34,8 @@ public class ChalkSaves : CovePlugin
     private const int MaxNameLength = 32;
     private const int MaxBackups = 20;
     private const int MaxSavesDefault = 20;
+    private const long OfferLifetimeMs = 2 * 60_000;
+    private const long ShareCooldownMs = 10_000;
     private const int MaxListed = 30;
 
     // same limits the server uses, a hand edited or damaged file can't flood the server
@@ -62,6 +67,12 @@ public class ChalkSaves : CovePlugin
     private readonly object fileLock = new();
     private readonly Dictionary<ulong, long> lastLoad = new();
 
+    // A share is an offer the other player has to accept, so nobody's folder can be filled by somebody else.
+    // One waiting offer per player, it is kept in memory and runs out after two minutes.
+    private sealed record Offer(string FromName, string Name, SaveFile Save, long ExpiresTick);
+    private readonly Dictionary<ulong, Offer> offers = new();
+    private readonly Dictionary<ulong, long> lastShare = new();
+
     public ChalkSaves(CoveServer server) : base(server) { }
 
     public override void onInit()
@@ -89,12 +100,17 @@ public class ChalkSaves : CovePlugin
         Register("chalkload", "Puts a saved chalk canvas on a canvas | Usage: !chalkload <name> <0-3>", LoadCanvas);
         Register("chalklist", "Lists the saved chalk canvases", ListSaves);
         Register("chalkdelete", "Deletes a saved chalk canvas | Usage: !chalkdelete <name>", DeleteSave);
+        Register("chalkshare", "Offers a copy of a save to a player | Usage: !chalkshare <name> <player>", ShareSave);
+        Register("chalkaccept", "Takes the chalk save somebody offered you | Usage: !chalkaccept [new name]", AcceptOffer);
+        Register("chalkdecline", "Turns down the chalk save somebody offered you", DeclineOffer);
     }
 
     public override void onEnd()
     {
         base.onEnd();
-        foreach (string command in new[] { "chalksave", "chalkload", "chalklist", "chalkdelete" })
+        lock (fileLock)
+            offers.Clear();
+        foreach (string command in new[] { "chalksave", "chalkload", "chalklist", "chalkdelete", "chalkshare", "chalkaccept", "chalkdecline" })
             ParentServer.UnregisterCommand(command);
     }
 
@@ -374,6 +390,145 @@ public class ChalkSaves : CovePlugin
         }
     }
 
+    private void ShareSave(WFPlayer player, string[] args)
+    {
+        if (args.Length < 2 || !TryName(args[0], out string name))
+        {
+            SendPlayerChatMessage(player, "Usage: !chalkshare <name> <player>");
+            return;
+        }
+
+        string ident = string.Join(" ", args.Skip(1)).Trim();
+        WFPlayer? to = FindOnline(ident);
+        if (to == null)
+        {
+            SendPlayerChatMessage(player, $"No player called \"{ident}\" is online.");
+            return;
+        }
+        if (to.SteamId.m_SteamID == player.SteamId.m_SteamID)
+        {
+            SendPlayerChatMessage(player, "You already have that save.");
+            return;
+        }
+
+        long now = Environment.TickCount64;
+        lock (fileLock)
+        {
+            if (lastShare.TryGetValue(player.SteamId.m_SteamID, out long last) && now - last < ShareCooldownMs)
+            {
+                SendPlayerChatMessage(player, "Please wait a few seconds before sharing again.");
+                return;
+            }
+
+            string path = Path.Combine(FolderFor(player.SteamId.m_SteamID), name + ".json");
+            SaveFile? save = File.Exists(path) ? Read(path) : null;
+            if (save == null)
+            {
+                SendPlayerChatMessage(player, $"You have no save called \"{name}\". Try !chalklist.");
+                return;
+            }
+
+            lastShare[player.SteamId.m_SteamID] = now;
+            offers[to.SteamId.m_SteamID] = new Offer(player.Username, name, save, now + OfferLifetimeMs);
+        }
+
+        SendPlayerChatMessage(player, $"Offered \"{name}\" to {to.Username}. They have 2 minutes to accept.");
+        SendPlayerChatMessage(to, $"{player.Username} wants to share the chalk save \"{name}\" with you. Type !chalkaccept to keep a copy, or !chalkdecline.");
+        Log($"{player.Username} offered \"{name}\" to {to.Username}.");
+    }
+
+    private void AcceptOffer(WFPlayer player, string[] args)
+    {
+        ulong id = player.SteamId.m_SteamID;
+        Offer? offer;
+        lock (fileLock)
+        {
+            offers.TryGetValue(id, out offer);
+            if (offer != null && Environment.TickCount64 > offer.ExpiresTick)
+            {
+                offers.Remove(id);
+                offer = null;
+            }
+        }
+
+        if (offer == null)
+        {
+            SendPlayerChatMessage(player, "Nobody has offered you a chalk save, or the offer ran out.");
+            return;
+        }
+
+        string name = offer.Name;
+        bool renamed = args.Length > 0;
+        if (renamed && !TryName(args[0], out name))
+        {
+            SendPlayerChatMessage(player, "Usage: !chalkaccept [new name]. Names can use letters, numbers, - and _.");
+            return;
+        }
+
+        lock (fileLock)
+        {
+            string dir = FolderFor(id);
+            Directory.CreateDirectory(dir);
+
+            if (Directory.GetFiles(dir, "*.json").Length >= maxSaves)
+            {
+                SendPlayerChatMessage(player, $"You already have {maxSaves} saves, delete one first with !chalkdelete <name>.");
+                return;
+            }
+
+            // never replace one of your own saves by accident: with no new name given, a free one is picked
+            if (File.Exists(Path.Combine(dir, name + ".json")))
+            {
+                if (renamed)
+                {
+                    SendPlayerChatMessage(player, $"You already have a save called \"{name}\", pick another name.");
+                    return;
+                }
+
+                string baseName = name.Length > MaxNameLength - 4 ? name.Substring(0, MaxNameLength - 4) : name;
+                for (int i = 2; i < 1000; i++)
+                {
+                    name = $"{baseName}-{i}";
+                    if (!File.Exists(Path.Combine(dir, name + ".json")))
+                        break;
+                }
+            }
+
+            WriteSave(Path.Combine(dir, name + ".json"), new SaveFile
+            {
+                Owner = id,
+                OwnerName = player.Username,
+                Saved = DateTime.UtcNow.ToString("o"),
+                Cells = offer.Save.Cells,
+            });
+            offers.Remove(id);
+        }
+
+        Log($"{player.Username} accepted \"{offer.Name}\" from {offer.FromName} as \"{name}\".");
+        SendPlayerChatMessage(player, $"Saved a copy from {offer.FromName} as \"{name}\". Use !chalkload {name} <0-3> to put it on a canvas.");
+    }
+
+    private void DeclineOffer(WFPlayer player, string[] args)
+    {
+        bool had;
+        lock (fileLock)
+            had = offers.Remove(player.SteamId.m_SteamID);
+
+        SendPlayerChatMessage(player, had ? "Offer declined." : "Nobody has offered you a chalk save.");
+    }
+
+    // an online player by name, fisher ID or Steam ID
+    private WFPlayer? FindOnline(string ident)
+    {
+        WFPlayer? found = ParentServer.GetPlayer(ident);
+        if (found != null)
+            return found;
+
+        return ulong.TryParse(ident, out ulong steamId)
+            ? GetAllPlayers().FirstOrDefault(p => p.SteamId.m_SteamID == steamId)
+            : null;
+    }
+
     // ---- canvases ----
 
     private ChalkCanvas GetOrCreateCanvas(int id)
@@ -570,6 +725,13 @@ public class ChalkSaves : CovePlugin
             "#    !chalkload <name> <0-3>     replaces that canvas with a save",
             "#    !chalklist                  lists your saves",
             "#    !chalkdelete <name>         deletes one of your saves",
+            "#    !chalkshare <name> <player> offers a copy of a save to a player who is online",
+            "#    !chalkaccept [new name]     takes the copy that was offered to you",
+            "#    !chalkdecline               turns the offer down",
+            "#",
+            "#  A shared save is only an offer, it lands in the other player's folder when",
+            "#  they type !chalkaccept (within 2 minutes), so nobody can fill your saves.",
+            "#  It counts toward their limit and is never saved over one of their own.",
             "#",
             "#  Every player has their own folder of saves, so they only see their own",
             "#  and two players can use the same name. Admins can add a player's name",
