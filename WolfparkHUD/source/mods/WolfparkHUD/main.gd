@@ -20,6 +20,7 @@ var panel
 var grip
 var coin_label
 var feed_button
+var feed_bar
 var buy_button
 var title_label
 var bet_field
@@ -36,6 +37,10 @@ var shop_signature = ""
 var gamble_min = 0
 var gamble_max = 0
 var feed_ready_at = 0
+var feed_cooldown_ms = 0
+var feed_bar_start = 0
+var feed_bar_end = 0
+var last_feeds = -1
 var buy_ready_at = 0
 var gamble_ready_at = 0
 var title_text = ""
@@ -118,7 +123,17 @@ func _build_ui():
 	feed_button.focus_mode = Control.FOCUS_NONE
 	feed_button.connect("pressed", self, "_on_feed")
 	_glass_button(feed_button)
+	# while the wolves are full the button is clearly grey, the colour then comes back from left to right
+	feed_button.add_stylebox_override("disabled", _glass(Color(0.45, 0.45, 0.45, 0.30), Color(0.7, 0.7, 0.7, 0.3), 8, 0))
 	row.add_child(feed_button)
+
+	# the cooldown bar: the button's colour, sliding back in behind the text as the cooldown runs down
+	feed_bar = ColorRect.new()
+	feed_bar.color = Color(0.3, 1.0, 1.0, 0.38)
+	feed_bar.show_behind_parent = true
+	feed_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	feed_bar.visible = false
+	feed_button.add_child(feed_bar)
 
 	buy_button = Button.new()
 	buy_button.text = "Buy"
@@ -254,6 +269,8 @@ func _poll():
 				shop_items.append({"id": bits[0], "label": bits[1], "price": int(bits[2])})
 		_rebuild_shop()
 
+	feed_cooldown_ms = int(str(steam.getLobbyData(lobby, "wp_feed_cd"))) * 1000
+
 	# the bet limits "min,max", empty when the server has no gambling
 	var gamble_text = str(steam.getLobbyData(lobby, "wp_gamble")).split(",")
 	if gamble_text.size() >= 2:
@@ -272,6 +289,16 @@ func _poll():
 	else:
 		coins = 0
 		feeds = 0
+	# a feed just counted (from the button or typed), so the wolves are full for the cooldown
+	if last_feeds == -1:
+		last_feeds = feeds
+	elif feeds > last_feeds:
+		last_feeds = feeds
+		if feed_cooldown_ms > 0:
+			feed_bar_start = OS.get_ticks_msec()
+			feed_bar_end = feed_bar_start + feed_cooldown_ms
+	elif feeds < last_feeds:
+		last_feeds = feeds
 	if parts.size() >= 5:
 		var roll = int(parts[2])
 		if last_roll == -1:
@@ -376,7 +403,15 @@ func _refresh():
 	title_label.text = title_text
 	title_label.add_color_override("font_color", title_color)
 	coin_label.text = "Coins: " + str(coins)
-	feed_button.disabled = now < feed_ready_at
+	feed_button.disabled = now < feed_ready_at or now < feed_bar_end
+	if now < feed_bar_end and feed_bar_end > feed_bar_start:
+		var progress = clamp(float(now - feed_bar_start) / float(feed_bar_end - feed_bar_start), 0.0, 1.0)
+		feed_bar.visible = true
+		feed_button.add_color_override("font_color_disabled", Color(1, 1, 1, 0.35 + 0.65 * progress))
+		feed_bar.rect_position = Vector2(1, 1)
+		feed_bar.rect_size = Vector2(max(0.0, (feed_button.rect_size.x - 2) * progress), max(0.0, feed_button.rect_size.y - 2))
+	else:
+		feed_bar.visible = false
 
 	# the gamble row only exists when the server has gambling
 	var gamble_on = gamble_max > 0

@@ -463,11 +463,13 @@ public class Feed : CovePlugin
             // what the Buy button lists:  id~Label~price;id~Label~price   and the bet limits of the gamble box
             string shop = string.Join(";", ShopList(s).Select(i => $"{i.Id}~{Clean(i.Label)}~{i.Price}"));
             string gamble = s.GambleEnabled ? $"{s.GambleMin},{s.GambleMax}" : "";
-            if (shop + "|" + gamble != publishedShop)
+            string feedCooldown = s.CooldownSeconds.ToString();
+            if (shop + "|" + gamble + "|" + feedCooldown != publishedShop)
             {
                 SteamMatchmaking.SetLobbyData(lobby, "wp_shop", shop);
                 SteamMatchmaking.SetLobbyData(lobby, "wp_gamble", gamble);
-                publishedShop = shop + "|" + gamble;
+                SteamMatchmaking.SetLobbyData(lobby, "wp_feed_cd", feedCooldown); // for the cooldown bar of the Feed Wolves button
+                publishedShop = shop + "|" + gamble + "|" + feedCooldown;
             }
 
             string title = s.HudTitle + "|" + s.HudTitleColor;
@@ -523,6 +525,7 @@ public class Feed : CovePlugin
                 SteamMatchmaking.SetLobbyData(lobby, "wp_hud", "");
                 SteamMatchmaking.SetLobbyData(lobby, "wp_shop", "");
                 SteamMatchmaking.SetLobbyData(lobby, "wp_gamble", "");
+                SteamMatchmaking.SetLobbyData(lobby, "wp_feed_cd", "");
                 SteamMatchmaking.SetLobbyData(lobby, "wp_title", "");
                 SteamMatchmaking.SetLobbyData(lobby, "wp_title_color", "");
                 foreach (ulong id in published.Keys)
