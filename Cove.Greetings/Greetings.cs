@@ -4,8 +4,7 @@ using Cove.Server.Actor;
 using Cove.Server.Plugins;
 
 /// <summary>
-/// Welcome message sent once a player has really loaded in, plus replies to the game's own event
-/// messages (rank ups, "caught them all" and so on). Everything is set in greetings.txt in the server's
+/// Welcome message sent once a player has really loaded in, plus a congratulation when they rank up. Everything is set in greetings.txt in the server's
 /// root directory (next to server.cfg), which is created on first start and reloads when saved.
 ///
 /// "Loaded in" means the player's first position update after joining. The join packet and the moment
@@ -15,7 +14,6 @@ public class Greetings : CovePlugin
 {
     private const string FileName = "greetings.txt";
     private const int WelcomeLines = 3;
-    private const int EventRules = 6;
     private const long ReloadCheckMs = 10_000;
     private const int MaxDelaySeconds = 60;
 
@@ -27,16 +25,6 @@ public class Greetings : CovePlugin
         public string LevelUp = "";
         public string LevelUpMatch = "ranked up to rank";
         public bool LevelUpToPlayer;
-        public List<EventRule> Events = new();
-        public bool LogEvents = true;
-    }
-
-    private class EventRule
-    {
-        public int Slot;
-        public string Match = "";
-        public string Message = "";
-        public bool ToPlayer;
     }
 
     private class Outgoing
@@ -148,13 +136,12 @@ public class Greetings : CovePlugin
                 });
             }
 
-            if (s.LogEvents)
-                Log($"{sender.Username} finished loading in, welcome queued.");
+            Log($"{sender.Username} finished loading in, welcome queued.");
         }
     }
 
-    // Event messages from the game are sent by the client without the "%u:" chat prefix,
-    // for example "%u ranked up to rank 67!". Normal chat always starts with "%u:" and /me with "(%u".
+    // The game announces a rank up as a message from the client without the "%u:" chat prefix,
+    // "%u ranked up to rank 67!". Normal chat always starts with "%u:" and /me with "(%u".
     private void HandleMessage(WFPlayer sender, Dictionary<string, object> packet)
     {
         if (!packet.TryGetValue("message", out object? rawText) || rawText is not string raw)
@@ -170,8 +157,6 @@ public class Greetings : CovePlugin
                 return;
 
             Settings s = settings;
-            if (s.LogEvents)
-                Log($"Game event from {sender.Username}: {text}");
 
             if (s.LevelUp.Length > 0 && s.LevelUpMatch.Length > 0
                 && text.Contains(s.LevelUpMatch, StringComparison.OrdinalIgnoreCase))
@@ -180,12 +165,6 @@ public class Greetings : CovePlugin
                 string message = Fill(s.LevelUp, sender.Username)
                     .Replace("%rank%", rank.Success ? rank.Groups[1].Value : "");
                 Enqueue(message, s.LevelUpToPlayer ? sender : null);
-            }
-
-            foreach (EventRule rule in s.Events)
-            {
-                if (text.Contains(rule.Match, StringComparison.OrdinalIgnoreCase))
-                    Enqueue(Fill(rule.Message, sender.Username).Replace("%event%", text), rule.ToPlayer ? sender : null);
             }
         }
     }
@@ -308,26 +287,8 @@ public class Greetings : CovePlugin
             next.LevelUpMatch = Text(v, "levelUpMatch");
         next.LevelUpToPlayer = Text(v, "levelUpTo").Equals("player", StringComparison.OrdinalIgnoreCase);
 
-        for (int i = 1; i <= EventRules; i++)
-        {
-            string match = Text(v, $"event{i}Match");
-            string message = Text(v, $"event{i}Message");
-            if (match.Length == 0 || message.Length == 0)
-                continue; // slot is off
-            next.Events.Add(new EventRule
-            {
-                Slot = i,
-                Match = match,
-                Message = message,
-                ToPlayer = Text(v, $"event{i}To").Equals("player", StringComparison.OrdinalIgnoreCase),
-            });
-        }
-
-        if (v.TryGetValue("logEvents", out string? log))
-            next.LogEvents = !log.Trim().Equals("false", StringComparison.OrdinalIgnoreCase);
-
         settings = next;
-        Log($"Loaded {FileName}: {next.Welcome.Count} welcome line(s), {next.Events.Count} event rule(s).");
+        Log($"Loaded {FileName}: {next.Welcome.Count} welcome line(s), rank up message {(next.LevelUp.Length > 0 ? "on" : "off")}.");
     }
 
     private static string Text(Dictionary<string, string> values, string key)
@@ -391,43 +352,6 @@ public class Greetings : CovePlugin
             "levelUpMatch = ranked up to rank",
             "levelUpTo = everyone",
             "",
-            "# OTHER GAME MESSAGES (for example catching every fish of a quality)",
-            "#  With logEvents = true, every message the game sends for a player is written to",
-            "#  the server log as  Game event from <name>: <text>. Trigger one in the game,",
-            "#  copy a piece of its text and put it in eventNMatch. The match ignores capital",
-            "#  letters and only has to be part of the message. Up to 6 rules.",
-            "#  %event% in a reply is the full game message.",
-            "#",
-            "#  Example:",
-            "#    event1Match   = caught all",
-            "#    event1Message = Wow %player%, what a collection!",
-            "#    event1To      = everyone",
-            "#",
-            "logEvents = true",
-            "",
-            "event1Match =",
-            "event1Message =",
-            "event1To = everyone",
-            "",
-            "event2Match =",
-            "event2Message =",
-            "event2To = everyone",
-            "",
-            "event3Match =",
-            "event3Message =",
-            "event3To = everyone",
-            "",
-            "event4Match =",
-            "event4Message =",
-            "event4To = everyone",
-            "",
-            "event5Match =",
-            "event5Message =",
-            "event5To = everyone",
-            "",
-            "event6Match =",
-            "event6Message =",
-            "event6To = everyone",
             "",
         };
 
