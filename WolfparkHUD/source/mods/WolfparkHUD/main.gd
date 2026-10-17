@@ -22,6 +22,8 @@ var coin_label
 var feed_button
 var feed_bar
 var buy_button
+var board_button
+var board_ready_at = 0
 var title_label
 var bet_field
 var gamble_button
@@ -96,11 +98,28 @@ func _build_ui():
 	column.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	margin.add_child(column)
 
+	var title_row = HBoxContainer.new()
+	title_row.add_constant_override("separation", 6)
+	title_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	column.add_child(title_row)
+
 	title_label = Label.new()
 	title_label.align = Label.ALIGN_CENTER
 	title_label.visible = false
+	title_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	title_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	column.add_child(title_label)
+	title_row.add_child(title_label)
+
+	# the leaderboard icon: a little clipboard that runs !wolves
+	board_button = Button.new()
+	board_button.focus_mode = Control.FOCUS_NONE
+	board_button.hint_tooltip = "Leaderboard"
+	board_button.rect_min_size = Vector2(26, 22)
+	board_button.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	board_button.connect("pressed", self, "_on_board")
+	board_button.connect("draw", self, "_draw_clipboard")
+	_glass_button(board_button)
+	title_row.add_child(board_button)
 
 	var row = HBoxContainer.new()
 	row.add_constant_override("separation", 10)
@@ -529,6 +548,26 @@ func _send_hidden(text):
 func _on_feed():
 	feed_ready_at = OS.get_ticks_msec() + FEED_DEBOUNCE_MS
 	_say("!feed")
+
+
+func _on_board():
+	var now = OS.get_ticks_msec()
+	if now < board_ready_at:
+		return
+	board_ready_at = now + 1500
+	_say("!wolves")
+
+
+# the clipboard is drawn, so it does not depend on any font having an icon for it
+func _draw_clipboard():
+	var b = board_button
+	var c = Color(1, 1, 1, 0.95) if not b.disabled else Color(1, 1, 1, 0.4)
+	var o = (b.rect_size - Vector2(12, 14)) / 2.0
+	o = Vector2(floor(o.x), floor(o.y))
+	b.draw_rect(Rect2(o + Vector2(0, 2), Vector2(12, 12)), c, false)
+	b.draw_rect(Rect2(o + Vector2(3, 0), Vector2(6, 3)), c, true)
+	b.draw_rect(Rect2(o + Vector2(3, 6), Vector2(6, 1)), c, true)
+	b.draw_rect(Rect2(o + Vector2(3, 9), Vector2(6, 1)), c, true)
 
 
 func _on_buy_toggle():
