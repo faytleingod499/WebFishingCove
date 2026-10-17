@@ -63,6 +63,7 @@ public class DiscordBridge : CovePlugin
         public bool Debug;
         public string GamePrefix = "";
         public string GameColor = "ffffff";
+        public string InviteUrl = "";
 
         public bool Ready => Token.Length > 0 && ChannelId != 0;
 
@@ -113,6 +114,18 @@ public class DiscordBridge : CovePlugin
             Log($"Could not load {FileName}: {e.Message}");
         }
 
+        // works with or without a bot, it only needs the inviteUrl setting
+        RegisterCommand(
+            command: "discord",
+            aliases: [],
+            callback: (player, args) =>
+            {
+                string url = GetSettings().InviteUrl;
+                SendPlayerChatMessage(player, url.Length > 0 ? $"Join our Discord: {url}" : "The Discord link has not been set up yet.");
+            }
+        );
+        SetCommandDescription("discord", "Shows the link to the server's Discord");
+
         Settings s = GetSettings();
         if (!s.Ready)
             Log($"The bridge is off, put a botToken and channelId in {FileName}.");
@@ -127,6 +140,7 @@ public class DiscordBridge : CovePlugin
     public override void onEnd()
     {
         base.onEnd();
+        ParentServer.UnregisterCommand("discord");
 
         Settings s = GetSettings();
         // a plugin reload is not the server stopping
@@ -798,6 +812,16 @@ public class DiscordBridge : CovePlugin
 
         next.GameColor = ReadHex(values, "gameColor", "ffffff");
 
+        if (values.TryGetValue("inviteUrl", out string? invite) && invite.Trim().Length > 0)
+        {
+            string link = invite.Trim();
+            if (Uri.TryCreate(link, UriKind.Absolute, out Uri? inviteUri)
+                && (inviteUri.Scheme == Uri.UriSchemeHttps || inviteUri.Scheme == Uri.UriSchemeHttp))
+                next.InviteUrl = link;
+            else
+                Log("inviteUrl must be a full link starting with https://, so !discord has nothing to show.");
+        }
+
 
         if (values.TryGetValue("webhookUrl", out string? hook) && hook.Length > 0)
         {
@@ -957,6 +981,8 @@ public class DiscordBridge : CovePlugin
             "#                      like [Discord]. Leave empty to show only the name.",
             "#  gameColor         = colour sent with Discord messages, like ff8800. The game may ignore it",
             "#                      and show them white, there is no known way around that.",
+            "#  inviteUrl         = optional. Your Discord server's invite link, like https://discord.gg/abc123.",
+            "#                      Players type !discord in the game to get it. Works without a bot.",
             "#",
             "#  You can edit and save this file while the server is running, it is",
             "#  picked up within about 10 seconds.",
@@ -976,6 +1002,7 @@ public class DiscordBridge : CovePlugin
             "debug = false",
             "gamePrefix =",
             "gameColor = ffffff",
+            "inviteUrl =",
             "",
         };
 
