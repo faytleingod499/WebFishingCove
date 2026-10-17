@@ -216,28 +216,6 @@ public class ChatCommands : CovePlugin
         });
         SetCommandDescription("chalkrecent", "Shows the 10 most recent players to use chalk");
 
-        RegisterCommand("reload", (player, args) =>
-        {
-            if (!IsPlayerAdmin(player)) return;
-            
-            SendPlayerChatMessage(player, "Reloading plugins, this can cause unintended behaviour in plugins that don't cleanup properly");
-
-            foreach(PluginInstance plugin in Server.loadedPlugins)
-            {
-                plugin.plugin.onEnd();
-                Log($"Unloaded plugin {plugin.plugin.GetType().Name}");
-            }
-
-            Server.loadedPlugins.Clear(); // clear the list
-
-            Server.RegisterDefaultCommands(); // re-register default commands
-            
-            Server.loadAllPlugins(true); // reload all plugins
-
-            SendPlayerChatMessage(player, "Plugins have been reloaded!");
-        });
-        SetCommandDescription("reload", "Reloads all plugins");
-
         RegisterCommand("plugins", (player, args) =>
         {
             if (!IsPlayerAdmin(player)) return;

@@ -209,12 +209,13 @@ namespace Cove.Server
                 "unban",
                 (sender, args) =>
                 {
-                    var forgivenPlayer = args[0];
+                    if (!isPlayerAdmin(sender.SteamId)) return;
                     if (args.Length < 1)
                     {
                         messagePlayer("Command usage: !unban STEAM_ID", sender.SteamId);
                         return;
                     }
+                    var forgivenPlayer = args[0];
                     if (
                         !System.Text.RegularExpressions.Regex.IsMatch(
                             forgivenPlayer,
