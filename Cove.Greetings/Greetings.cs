@@ -1,10 +1,13 @@
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using Cove.Server;
 using Cove.Server.Actor;
 using Cove.Server.Plugins;
 
 /// <summary>
-/// Welcome message sent once a player has really loaded in, plus a congratulation when they rank up. Everything is set in greetings.txt in the server's
+/// Welcome message sent once a player has really loaded in, a different "welcome back" message for players
+/// who have been here before (remembered by Steam ID, greeted by their current name), and a congratulation
+/// when they rank up. Everything is set in greetings.txt in the server's
 /// root directory (next to server.cfg), which is created on first start and reloads when saved.
 ///
 /// "Loaded in" means the player's first position update after joining. The join packet and the moment
@@ -13,6 +16,7 @@ using Cove.Server.Plugins;
 public class Greetings : CovePlugin
 {
     private const string FileName = "greetings.txt";
+    private const string PlayersFileName = "greetings-players.json";
     private const int WelcomeLines = 3;
     private const long ReloadCheckMs = 10_000;
     private const int MaxDelaySeconds = 60;
@@ -21,10 +25,20 @@ public class Greetings : CovePlugin
     {
         public List<string> Welcome = new();
         public bool WelcomeToEveryone;
+        public List<string> WelcomeBack = new();
+        public bool WelcomeBackToEveryone;
         public int WelcomeDelaySeconds = 2;
         public string LevelUp = "";
         public string LevelUpMatch = "ranked up to rank";
         public bool LevelUpToPlayer;
+    }
+
+    private class KnownPlayer
+    {
+        public string Name { get; set; } = "";
+        public string FirstSeen { get; set; } = "";
+        public string LastSeen { get; set; } = "";
+        public int Visits { get; set; }
     }
 
     private class Outgoing
@@ -39,6 +53,8 @@ public class Greetings : CovePlugin
     private Settings settings = new();
     private readonly HashSet<ulong> waitingForFirstMove = new();
     private readonly List<Outgoing> queue = new();
+    private readonly Dictionary<ulong, KnownPlayer> known = new();
+    private string playersPath = "";
     private string filePath = "";
     private DateTime loadedWriteTime = DateTime.MinValue;
     private long nextReloadCheckTick;
@@ -50,6 +66,7 @@ public class Greetings : CovePlugin
     {
         base.onInit();
         filePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, FileName);
+        playersPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, PlayersFileName);
 
         lock (sync)
         {
@@ -62,6 +79,7 @@ public class Greetings : CovePlugin
             {
                 Log($"Could not load {FileName}: {e.Message}");
             }
+            LoadPlayers();
             nextReloadCheckTick = Environment.TickCount64 + ReloadCheckMs;
             running = true;
         }
@@ -125,18 +143,32 @@ public class Greetings : CovePlugin
             waitingForFirstMove.Remove(sender.SteamId.m_SteamID);
 
             Settings s = settings;
+            ulong id = sender.SteamId.m_SteamID;
+            string now = DateTime.UtcNow.ToString("o");
+
+            // remembered by Steam ID, so a changed name does not make them look new
+            bool returning = known.TryGetValue(id, out KnownPlayer? record);
+            if (record == null)
+                known[id] = record = new KnownPlayer { FirstSeen = now };
+            record.Name = sender.Username;
+            record.LastSeen = now;
+            record.Visits++;
+            SavePlayers();
+
+            List<string> lines = returning ? s.WelcomeBack : s.Welcome;
+            bool toEveryone = returning ? s.WelcomeBackToEveryone : s.WelcomeToEveryone;
             long due = Environment.TickCount64 + s.WelcomeDelaySeconds * 1000L;
-            foreach (string line in s.Welcome)
+            foreach (string line in lines)
             {
                 queue.Add(new Outgoing
                 {
                     DueTick = due,
-                    Text = Fill(line, sender.Username),
-                    OnlyTo = s.WelcomeToEveryone ? null : sender.SteamId.m_SteamID,
+                    Text = Fill(line, sender.Username).Replace("%visits%", record.Visits.ToString()),
+                    OnlyTo = toEveryone ? null : id,
                 });
             }
 
-            Log($"{sender.Username} finished loading in, welcome queued.");
+            Log($"{sender.Username} finished loading in ({(returning ? $"returning, visit {record.Visits}" : "first visit")}), welcome queued.");
         }
     }
 
@@ -232,6 +264,43 @@ public class Greetings : CovePlugin
         }
     }
 
+    // the list of players is read once at startup, then kept in memory and saved on every change
+    private void LoadPlayers()
+    {
+        known.Clear();
+        try
+        {
+            if (!File.Exists(playersPath))
+                return;
+            var loaded = JsonSerializer.Deserialize<Dictionary<ulong, KnownPlayer>>(File.ReadAllText(playersPath));
+            if (loaded != null)
+                foreach (var pair in loaded)
+                    known[pair.Key] = pair.Value;
+            Log($"Remembering {known.Count} player(s) from {PlayersFileName}.");
+        }
+        catch (Exception e)
+        {
+            // keep the unreadable file so nobody's history is lost, and start fresh
+            Log($"Could not read {PlayersFileName}: {e.Message}");
+            try { File.Move(playersPath, playersPath + ".broken-" + DateTime.UtcNow.ToString("yyyyMMddHHmmss")); }
+            catch { /* nothing more we can do */ }
+        }
+    }
+
+    private void SavePlayers()
+    {
+        try
+        {
+            string temp = playersPath + ".tmp";
+            File.WriteAllText(temp, JsonSerializer.Serialize(known, new JsonSerializerOptions { WriteIndented = true }));
+            File.Move(temp, playersPath, overwrite: true);
+        }
+        catch (Exception e)
+        {
+            Log($"Could not save {PlayersFileName}: {e.Message}");
+        }
+    }
+
     private string Fill(string text, string player)
     {
         return text.Replace("%player%", player)
@@ -278,6 +347,14 @@ public class Greetings : CovePlugin
                 next.Welcome.Add(line);
         }
         next.WelcomeToEveryone = Text(v, "welcomeTo").Equals("everyone", StringComparison.OrdinalIgnoreCase);
+
+        for (int i = 1; i <= WelcomeLines; i++)
+        {
+            string line = Text(v, $"welcomeBackMessage{i}");
+            if (line.Length > 0)
+                next.WelcomeBack.Add(line);
+        }
+        next.WelcomeBackToEveryone = Text(v, "welcomeBackTo").Equals("everyone", StringComparison.OrdinalIgnoreCase);
 
         if (int.TryParse(Text(v, "welcomeDelay"), out int delay))
             next.WelcomeDelaySeconds = Math.Clamp(delay, 0, MaxDelaySeconds);
@@ -330,16 +407,29 @@ public class Greetings : CovePlugin
             "#    %player%   the player's name",
             "#    %count%    how many players are online",
             "#",
+            "#    %visits%   how many times this player has joined (welcome back only)",
+            "#",
             "#  WELCOME",
             "#  Sent when a player has finished loading in (their first position",
             "#  update), so they actually see it. Up to 3 lines, sent in order.",
-            "#  welcomeTo     = player (only the new player) or everyone",
-            "#  welcomeDelay  = extra seconds to wait after they load, 0 to 60",
+            "#  Players are remembered by Steam ID in greetings-players.json, so a",
+            "#  player who comes back gets the WELCOME BACK lines instead, under",
+            "#  whatever their name is now. Delete that file to treat everyone as new.",
+            "#  welcomeTo      = player (only the new player) or everyone",
+            "#  welcomeBackTo  = player or everyone, for returning players",
+            "#  welcomeDelay   = extra seconds to wait after they load, 0 to 60",
             "#",
             "welcomeMessage1 = Welcome to the server, %player%!",
             "welcomeMessage2 =",
             "welcomeMessage3 =",
             "welcomeTo = player",
+            "",
+            "# WELCOME BACK, leave all three empty to send nothing to returning players",
+            "welcomeBackMessage1 = Welcome back, %player%!",
+            "welcomeBackMessage2 =",
+            "welcomeBackMessage3 =",
+            "welcomeBackTo = player",
+            "",
             "welcomeDelay = 2",
             "",
             "# LEVEL UP",
