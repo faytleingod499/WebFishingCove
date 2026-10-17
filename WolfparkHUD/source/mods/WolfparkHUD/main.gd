@@ -11,7 +11,6 @@ const DEFAULT_POS = Vector2(16, 52)
 const FEED_DEBOUNCE_MS = 1500
 const BUY_DEBOUNCE_MS = 1500
 const GAMBLE_DEBOUNCE_MS = 1500
-const RESULT_SHOW_MS = 7000
 const POPUP_ID = "WOLFPARK"
 
 var steam = null
@@ -28,7 +27,6 @@ var board_ready_at = 0
 var title_label
 var bet_field
 var gamble_button
-var result_label
 var shop_panel
 var shop_box
 
@@ -44,6 +42,7 @@ var feed_cooldown_ms = 0
 var feed_bar_start = 0
 var feed_bar_end = 0
 var last_feeds = -1
+var no_entry_since = 0
 var buy_ready_at = 0
 var gamble_ready_at = 0
 var title_text = ""
@@ -51,8 +50,6 @@ var title_color = Color(0.0, 1.0, 1.0)
 var chat_color = ""
 var chat_connected = false
 
-var last_roll = -1
-var result_until = 0
 
 var poll_timer = 0.0
 var dragging = false
@@ -113,24 +110,30 @@ func _build_ui():
 	grip.connect("gui_input", self, "_on_grip_input")
 	row.add_child(grip)
 
+	# the title, coins and fed count sit centred in the rest of the row
+	var info = HBoxContainer.new()
+	info.alignment = BoxContainer.ALIGN_CENTER
+	info.add_constant_override("separation", 10)
+	info.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	info.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.add_child(info)
+
 	title_label = Label.new()
-	title_label.align = Label.ALIGN_LEFT
 	title_label.visible = false
-	title_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	title_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	row.add_child(title_label)
+	info.add_child(title_label)
 
 	coin_label = Label.new()
 	coin_label.text = "Coins: 0"
 	coin_label.add_color_override("font_color", Color(1.0, 0.85, 0.4))
 	coin_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	row.add_child(coin_label)
+	info.add_child(coin_label)
 
 	feeds_label = Label.new()
 	feeds_label.text = "Fed: 0"
 	feeds_label.add_color_override("font_color", Color(0.75, 0.95, 1.0))
 	feeds_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	row.add_child(feeds_label)
+	info.add_child(feeds_label)
 
 	# middle: leaderboard, feed and buy
 	var button_row = HBoxContainer.new()
@@ -173,12 +176,6 @@ func _build_ui():
 	_glass_button(buy_button)
 	button_row.add_child(buy_button)
 
-	# the gamble row
-	var gamble_row = HBoxContainer.new()
-	gamble_row.add_constant_override("separation", 8)
-	gamble_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	column.add_child(gamble_row)
-
 	bet_field = LineEdit.new()
 	bet_field.placeholder_text = "coins"
 	bet_field.max_length = 6
@@ -196,13 +193,8 @@ func _build_ui():
 	gamble_button.focus_mode = Control.FOCUS_NONE
 	gamble_button.connect("pressed", self, "_on_gamble")
 	_glass_button(gamble_button)
-	gamble_row.add_child(gamble_button)
-	gamble_row.add_child(bet_field)
-
-	result_label = Label.new()
-	result_label.text = ""
-	result_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	gamble_row.add_child(result_label)
+	button_row.add_child(gamble_button)
+	button_row.add_child(bet_field)
 
 	# the list that opens under the panel with the Buy button
 	shop_panel = PanelContainer.new()
@@ -270,6 +262,7 @@ func _process(delta):
 # --- reading what the server tells us ---
 
 func _poll():
+	var was_active = active
 	active = false
 	if steam == null:
 		return
@@ -283,6 +276,13 @@ func _poll():
 	if str(steam.getLobbyData(lobby, "wp_hud")) != "1":
 		return
 	active = true
+	if not was_active:
+		# just arrived on the server (or came back to it): forget the old feed count and cooldown
+		last_feeds = -1
+		no_entry_since = 0
+		feed_bar_end = 0
+		feed_bar_start = 0
+		feed_ready_at = 0
 
 	title_text = str(steam.getLobbyData(lobby, "wp_title"))
 	var color_text = str(steam.getLobbyData(lobby, "wp_title_color")).replace("#", "")
@@ -314,7 +314,7 @@ func _poll():
 		gamble_min = 0
 		gamble_max = 0
 
-	# mine: "coins,feeds" and after a gamble ",roll number,multiplier,coins won or lost"
+	# mine: "coins,feeds" (the server may add more after that, the mod ignores it)
 	var mine = str(steam.getLobbyData(lobby, "wp_p" + str(net.STEAM_ID)))
 	var parts = mine.split(",")
 	if parts.size() >= 2:
@@ -323,8 +323,15 @@ func _poll():
 	else:
 		coins = 0
 		feeds = 0
-	# a feed just counted (from the button or typed), so the wolves are full for the cooldown
-	if last_feeds == -1:
+	# a feed just counted (from the button or typed), so the wolves are full for the cooldown.
+	# The first number we see for this player is only where they stood when they joined, never a feed.
+	if parts.size() < 2:
+		# a brand new player has no entry yet: if it is still missing after a few seconds, they simply have no feeds
+		if no_entry_since == 0:
+			no_entry_since = OS.get_ticks_msec()
+		elif last_feeds == -1 and OS.get_ticks_msec() - no_entry_since > 4000:
+			last_feeds = 0
+	elif last_feeds == -1:
 		last_feeds = feeds
 	elif feeds > last_feeds:
 		last_feeds = feeds
@@ -333,33 +340,6 @@ func _poll():
 			feed_bar_end = feed_bar_start + feed_cooldown_ms
 	elif feeds < last_feeds:
 		last_feeds = feeds
-	if parts.size() >= 5:
-		var roll = int(parts[2])
-		if last_roll == -1:
-			last_roll = roll # a result from before we looked, do not show it again
-		elif roll != last_roll:
-			last_roll = roll
-			_show_result(float(parts[3]), int(parts[4]))
-	else:
-		if last_roll == -1:
-			last_roll = 0
-
-
-func _show_result(multiplier, net_change):
-	var text = ""
-	var color = Color(1, 1, 1)
-	if net_change > 0:
-		text = "x" + str(multiplier) + "  +" + str(net_change)
-		color = Color(0.5, 1.0, 0.6) if multiplier < 10 else Color(1.0, 0.85, 0.3)
-	elif net_change == 0:
-		text = "x" + str(multiplier) + "  even"
-		color = Color(1, 1, 1)
-	else:
-		text = "lost " + str(-net_change)
-		color = Color(1.0, 0.5, 0.5)
-	result_label.text = text
-	result_label.add_color_override("font_color", color)
-	result_until = OS.get_ticks_msec() + RESULT_SHOW_MS
 
 
 func _rebuild_shop():
@@ -490,7 +470,6 @@ func _refresh():
 	var gamble_on = gamble_max > 0
 	bet_field.visible = gamble_on
 	gamble_button.visible = gamble_on
-	result_label.visible = gamble_on and now < result_until
 	bet_field.placeholder_text = str(gamble_min) + "-" + str(gamble_max)
 	gamble_button.disabled = now < gamble_ready_at or coins < max(gamble_min, 1)
 
