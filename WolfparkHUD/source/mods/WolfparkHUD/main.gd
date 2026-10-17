@@ -51,6 +51,7 @@ var gamble_ready_at = 0
 var title_text = ""
 var title_color = Color(0.0, 1.0, 1.0)
 var chat_color = ""
+var chat_expanded_for = 0
 var TITLE_ID = "title_lonely"
 var lure_tries = 0
 var prev_title = ""
@@ -266,6 +267,8 @@ func _process(delta):
 		poll_timer = 0.0
 		_poll()
 		_sync_title()
+		if active:
+			_expand_chat()
 	_refresh()
 	# the game reads its keys before this node runs, so let go of its controls only after that
 	if pending_unlock:
@@ -507,6 +510,16 @@ func _get_hud():
 	if hud == null or not is_instance_valid(hud):
 		return null
 	return hud
+
+
+# the chat window starts big on the server: once per game session, so it can still be made small again
+func _expand_chat():
+	var hud = _get_hud()
+	if hud == null or chat_expanded_for == hud.get_instance_id():
+		return
+	chat_expanded_for = hud.get_instance_id()
+	if hud.get("chat_expand") == false and hud.has_method("_on_expand_pressed"):
+		hud._on_expand_pressed()
 
 
 func _refresh():

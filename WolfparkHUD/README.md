@@ -3,7 +3,7 @@
 A client mod (for [GDWeave](https://thunderstore.io/c/webfishing/p/NotNet/GDWeave/)) that adds a small panel with
 your wolf coin balance, a **Feed Wolves** button, a **Buy** menu (everything the server sells) and a bet box with a **Gamble** button.
 
-On such a server anything you type that starts with `!` is sent to the server only and does not show in chat, and the buttons do the same. The heading (default "Ether's Wolf Park", cyan) comes from `hudTitle` / `hudTitleColor` in `feed.txt`. Server messages (chat lines with no player name) are shown in sky blue; change or disable it with `hudChatColor` in `feed.txt`. A small clipboard icon next to the heading (tooltip "Leaderboard") runs `!wolves`.
+On such a server anything you type that starts with `!` is sent to the server only and does not show in chat, and the buttons do the same. The heading (default "Ether's Wolf Park", cyan) comes from `hudTitle` / `hudTitleColor` in `feed.txt`. Server messages (chat lines with no player name) are shown in sky blue; change or disable it with `hudChatColor` in `feed.txt`. A small clipboard icon next to the heading (tooltip "Leaderboard") runs `!wolves`. The chat window also starts expanded (you can still shrink it).
 
 It only appears on servers that run the Cove `Feed` plugin from this repository (the plugin marks the server through
 the Steam lobby data). On every other server the mod stays hidden and does nothing.
