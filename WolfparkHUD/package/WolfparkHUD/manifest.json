@@ -1,0 +1,10 @@
+{
+    "Id": "WolfparkHUD",
+    "PackPath": "WolfparkHUD.pck",
+    "Metadata": {
+        "Name": "Wolfpark HUD",
+        "Author": "Fayt",
+        "Version": "1.0.0",
+        "Description": "Shows your wolf coins and has Feed Wolves / Meteor buttons. Only appears on servers running the Cove Feed plugin, does nothing anywhere else."
+    }
+}

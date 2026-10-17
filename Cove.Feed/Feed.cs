@@ -2,6 +2,7 @@ using System.Text.Json;
 using Cove.Server;
 using Cove.Server.Actor;
 using Cove.Server.Plugins;
+using Steamworks;
 
 /// <summary>
 /// Adds the command  !feed  for everybody. Everybody sees a chat message saying who fed the wolves and how many
@@ -12,6 +13,9 @@ using Cove.Server.Plugins;
 ///   !coins    shows how many coins you have
 ///   !meteor   spends coins to call down a meteor
 ///   !wolves   shows the top feeders and the server total
+///
+/// It also announces itself to the optional Wolfpark HUD mod through the Steam lobby data (keys starting with wp_),
+/// which shows each player their coins and has buttons for !feed and !meteor. Players without the mod see nothing.
 ///
 /// The wording, the cooldown and the size of the top list are set in feed.txt in the server's root directory
 /// (next to server.cfg), which is created on first start and reloads about 10 seconds after it is saved.
@@ -65,6 +69,14 @@ public class Feed : CovePlugin
     private DateTime loadedWriteTime = DateTime.MinValue;
     private long nextReloadCheckTick;
     private bool running;
+
+    // what the HUD mod is told through the lobby data
+    private const int PublishEveryMs = 15_000;
+    private bool publishDirty = true;
+    private long nextPublishTick;
+    private ulong publishedLobby;
+    private string publishedCost = "";
+    private readonly Dictionary<ulong, string> published = new();
 
     public Feed(CoveServer server) : base(server) { }
 
@@ -173,6 +185,19 @@ public class Feed : CovePlugin
         ParentServer.UnregisterCommand("wolves");
         ParentServer.UnregisterCommand("coins");
         ParentServer.UnregisterCommand("meteor");
+        ClearLobbyData();
+    }
+
+    public override void onPlayerJoin(WFPlayer player)
+    {
+        base.onPlayerJoin(player);
+        publishDirty = true;
+    }
+
+    public override void onPlayerLeave(WFPlayer player)
+    {
+        base.onPlayerLeave(player);
+        publishDirty = true;
     }
 
     // triggered 12 times a second by the server
@@ -216,6 +241,8 @@ public class Feed : CovePlugin
                 hungryAt.Remove(pair.Key);
             }
         }
+
+        PublishLobbyData(s);
 
         if (hungry.Count == 0 || s.HungryMessage.Length == 0)
             return;
@@ -310,6 +337,93 @@ public class Feed : CovePlugin
 
         if (s.CoinsPerFeed > 0 && s.CoinMessage.Length > 0)
             SendPlayerChatMessage(player, FillCoins(s.CoinMessage, player.Username, coins, s, s.CoinsPerFeed));
+    }
+
+    // ---- the HUD mod ----
+
+    // The coins of every player are written into the Steam lobby data as  wp_p<SteamID> = "coins,feeds", next to
+    // the marker  wp_hud = 1  that tells the mod this is a server it should show itself on.
+    private void PublishLobbyData(Settings s)
+    {
+        long now = Environment.TickCount64;
+        if (!publishDirty && now < nextPublishTick)
+            return;
+        publishDirty = false;
+        nextPublishTick = now + PublishEveryMs;
+
+        try
+        {
+            CSteamID lobby = ParentServer.SteamLobby;
+            if (!lobby.IsValid())
+                return;
+
+            if (publishedLobby != lobby.m_SteamID)
+            {
+                // a new lobby, so nothing has been written to it yet
+                published.Clear();
+                publishedCost = "";
+                SteamMatchmaking.SetLobbyData(lobby, "wp_hud", "1");
+                publishedLobby = lobby.m_SteamID;
+            }
+
+            string cost = s.MeteorCost.ToString();
+            if (cost != publishedCost)
+            {
+                SteamMatchmaking.SetLobbyData(lobby, "wp_meteor_cost", cost);
+                publishedCost = cost;
+            }
+
+            var wanted = new Dictionary<ulong, string>();
+            lock (sync)
+            {
+                foreach (WFPlayer player in GetAllPlayers())
+                {
+                    ulong id = player.SteamId.m_SteamID;
+                    wanted[id] = counts.TryGetValue(id, out Record? record) ? $"{record.Coins},{record.Count}" : "0,0";
+                }
+            }
+
+            foreach (var pair in wanted)
+            {
+                if (published.TryGetValue(pair.Key, out string? old) && old == pair.Value)
+                    continue;
+                SteamMatchmaking.SetLobbyData(lobby, "wp_p" + pair.Key, pair.Value);
+                published[pair.Key] = pair.Value;
+            }
+
+            // players who left, so the lobby data does not grow forever
+            foreach (ulong gone in published.Keys.Where(id => !wanted.ContainsKey(id)).ToList())
+            {
+                SteamMatchmaking.SetLobbyData(lobby, "wp_p" + gone, "");
+                published.Remove(gone);
+            }
+        }
+        catch (Exception e)
+        {
+            Log($"Could not update the HUD data: {e.Message}");
+        }
+    }
+
+    private void ClearLobbyData()
+    {
+        try
+        {
+            CSteamID lobby = ParentServer.SteamLobby;
+            if (lobby.IsValid() && publishedLobby == lobby.m_SteamID)
+            {
+                SteamMatchmaking.SetLobbyData(lobby, "wp_hud", "");
+                SteamMatchmaking.SetLobbyData(lobby, "wp_meteor_cost", "");
+                foreach (ulong id in published.Keys)
+                    SteamMatchmaking.SetLobbyData(lobby, "wp_p" + id, "");
+            }
+        }
+        catch (Exception e)
+        {
+            Log($"Could not clear the HUD data: {e.Message}");
+        }
+        published.Clear();
+        publishedLobby = 0;
+        publishedCost = "";
     }
 
     private void ShowCoins(WFPlayer player)
@@ -634,6 +748,7 @@ public class Feed : CovePlugin
             string temp = countsPath + ".tmp";
             File.WriteAllText(temp, JsonSerializer.Serialize(counts, new JsonSerializerOptions { WriteIndented = true }));
             File.Move(temp, countsPath, overwrite: true);
+            publishDirty = true; // the HUD mod shows these numbers
         }
         catch (Exception e)
         {
