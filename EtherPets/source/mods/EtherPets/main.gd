@@ -6,7 +6,7 @@ extends Node
 # its colours. Your choices are shared through the Steam lobby, so other players who have this mod
 # see your pet exactly as you made it. Players without the mod do not see pets. Works on any server.
 
-const VERSION = "2.8.7"
+const VERSION = "2.8.8"
 const CONFIG_PATH = "user://etherpets.json"
 const OLD_CONFIG_PATH = "user://wolfpets.json" # from when it was Wolf Pets
 const SHADOW_PATH = "res://Scenes/Entities/Shadow/shadow.tscn"
@@ -162,6 +162,8 @@ var menu_open = false
 var palettes = {} # name -> colours, the player's own saved looks
 var name_field
 var palette_box
+var palette_toggle
+var palettes_open = false # the saved palette list starts folded
 var locked_hud = null
 var theme_applied = false
 
@@ -1371,12 +1373,17 @@ func _build_ui():
 	_glass_button(save)
 	save_row.add_child(save)
 
-	var saved_label = Label.new()
-	saved_label.text = "My palettes"
-	saved_label.add_color_override("font_color", Color(0.75, 0.95, 1.0))
-	column.add_child(saved_label)
+	# the saved palettes fold away under a header so they don't fill the screen
+	palette_toggle = Button.new()
+	palette_toggle.align = Button.ALIGN_LEFT
+	palette_toggle.focus_mode = Control.FOCUS_NONE
+	palette_toggle.connect("pressed", self, "_on_toggle_palettes")
+	_glass_button(palette_toggle)
+	palette_toggle.add_color_override("font_color", Color(0.75, 0.95, 1.0))
+	column.add_child(palette_toggle)
 	palette_box = VBoxContainer.new()
 	palette_box.add_constant_override("separation", 3)
+	palette_box.visible = palettes_open
 	column.add_child(palette_box)
 
 
@@ -1709,6 +1716,21 @@ func _on_delete_palette(name):
 	_save_config()
 
 
+func _on_toggle_palettes():
+	palettes_open = not palettes_open
+	_update_palette_toggle()
+	_save_config()
+	if menu_open:
+		call_deferred("_place_menu")
+
+
+func _update_palette_toggle():
+	if palette_box != null:
+		palette_box.visible = palettes_open
+	if palette_toggle != null:
+		palette_toggle.text = ("-  " if palettes_open else "+  ") + "My palettes (%d)" % palettes.size()
+
+
 # one row per saved palette: its colours as little swatches, its name, and a delete button
 func _rebuild_palettes():
 	if palette_box == null:
@@ -1748,6 +1770,7 @@ func _rebuild_palettes():
 		del.connect("pressed", self, "_on_delete_palette", [name])
 		_glass_button(del)
 		row.add_child(del)
+	_update_palette_toggle()
 	if menu_open:
 		call_deferred("_place_menu")
 
@@ -1871,6 +1894,8 @@ func _load_config():
 		paw.rect_position = Vector2(float(data["x"]), float(data["y"]))
 	if data.has("show"):
 		show_pet = bool(data["show"])
+	if data.has("palettes_open"):
+		palettes_open = bool(data["palettes_open"])
 	if data.has("howl"):
 		howl_on = bool(data["howl"])
 	if data.has("cooldown"):
@@ -1910,5 +1935,5 @@ func _save_config():
 	var file = File.new()
 	if file.open(CONFIG_PATH, File.WRITE) != OK:
 		return
-	file.store_string(to_json({"x": paw.rect_position.x, "y": paw.rect_position.y, "show": show_pet, "species": species, "howl": howl_on, "cooldown": answer_cooldown, "size": pet_size, "name": pet_name, "colors": colors, "palettes": palettes}))
+	file.store_string(to_json({"x": paw.rect_position.x, "y": paw.rect_position.y, "show": show_pet, "species": species, "howl": howl_on, "cooldown": answer_cooldown, "size": pet_size, "name": pet_name, "colors": colors, "palettes": palettes, "palettes_open": palettes_open}))
 	file.close()

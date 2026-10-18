@@ -1,3 +1,6 @@
+## 2.8.8
+- The saved palette list now folds away under a "My palettes (N)" header, so the menu takes less room. It remembers whether you left it open.
+
 ## 2.8.7
 - The wolf's and cat's necks are no longer blocks: a smooth neck that tapers from the chest into the head,
   with a gentle arch on top and the belly colour along the throat.
