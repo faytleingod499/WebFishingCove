@@ -6,7 +6,7 @@ extends Node
 # its colours. Your choices are shared through the Steam lobby, so other players who have this mod
 # see your pet exactly as you made it. Players without the mod do not see pets. Works on any server.
 
-const VERSION = "2.7.0"
+const VERSION = "2.7.1"
 const CONFIG_PATH = "user://etherpets.json"
 const OLD_CONFIG_PATH = "user://wolfpets.json" # from when it was Wolf Pets
 const SHADOW_PATH = "res://Scenes/Entities/Shadow/shadow.tscn"
@@ -460,11 +460,14 @@ func _say(pet, sound, pitch):
 
 # when its owner barks (or meows) it answers with a short howl, nose to the sky
 func _listen_for_bark(pet, owner_node, delta):
+	# any bark: the dog's and cat's, and the ones custom species add through Lure ("bark_<species>")
 	var barking = false
-	for name in ["sound_manager/bark_dog", "sound_manager/bark_cat"]:
-		var player = owner_node.get_node_or_null(name)
-		if player != null and player.playing:
-			barking = true
+	var sm = owner_node.get_node_or_null("sound_manager")
+	if sm != null:
+		for player in sm.get_children():
+			if player.name.begins_with("bark_") and player.get("playing") == true:
+				barking = true
+				break
 	var now = OS.get_ticks_msec()
 	if barking and not pet["barking"] and pet["howl_on"] \
 			and now >= pet["last_answer"] + int(pet.get("cooldown", COOLDOWN_DEFAULT)) * 1000 \
