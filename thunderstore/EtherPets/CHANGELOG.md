@@ -1,5 +1,5 @@
-## 2.8.5
-- The wolf and cat now sit like a real dog or cat: rump on the ground, back legs folded at the knee and
+## 2.8.6
+- The wolf and cat now sit like a real dog or cat: rump on the ground, back legs folded with the knee up and
   hock with the feet flat and pointing forward (they have a knee joint now), and a gentle breathing loop
   that no longer jumps when it repeats.
 
