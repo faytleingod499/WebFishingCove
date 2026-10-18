@@ -6,7 +6,7 @@ extends Node
 # Your colours are shared through the Steam lobby, so other players who have this mod see your wolf
 # exactly as you made it. Players without the mod do not see pets at all. Works on any server.
 
-const VERSION = "1.2.3"
+const VERSION = "1.3.0"
 const CONFIG_PATH = "user://wolfpets.json"
 const MODEL_PATH = "res://mods/WolfPets/wolf_pet.scn"
 const SHADOW_PATH = "res://Scenes/Entities/Shadow/shadow.tscn"
@@ -17,7 +17,9 @@ const SKELETON_PATH = "body/player_body/Armature/Skeleton"
 const POPUP_ID = "WOLFPETS"
 const DEFAULT_PAW_POS = Vector2(16, 140)
 
-const PET_SCALE = 0.82    # about 60% of a player's height
+const PET_SCALE = 0.82    # about 60% of a player's height, at size 100%
+const SIZE_MIN = 0.5
+const SIZE_MAX = 1.5
 const FOLLOW_NEAR = 2.1    # stops when this close to its owner
 const FOLLOW_FAR = 3.0     # starts walking again when further than this
 const MAX_PALETTES = 12
@@ -50,6 +52,9 @@ var shadow_scene = null
 
 # my pet
 var show_pet = true
+var pet_size = 1.0 # times the normal size
+var size_slider
+var size_label
 var colors = {}
 var sync_dirty = true
 var sync_timer = 0.0
@@ -124,12 +129,12 @@ func _color_of(cfg_colors, key):
 	return Color(text)
 
 
-# what goes into the lobby: "1;1;fur,back,belly,eyes,nose,ears" (format, shown, colours)
+# what goes into the lobby: "1;1;fur,back,belly,eyes,nose,ears;1.00" (format, shown, colours, size)
 func _sync_text():
 	var list = []
 	for part in PARTS:
 		list.append(str(colors[part[0]]))
-	return "1;" + ("1" if show_pet else "0") + ";" + PoolStringArray(list).join(",")
+	return "1;" + ("1" if show_pet else "0") + ";" + PoolStringArray(list).join(",") + ";" + ("%.2f" % pet_size)
 
 
 func _parse_sync(text):
@@ -141,6 +146,7 @@ func _parse_sync(text):
 	for i in range(PARTS.size()):
 		if i < list.size() and list[i].is_valid_html_color():
 			cfg["colors"][PARTS[i][0]] = list[i]
+	cfg["size"] = clamp(float(bits[3]), SIZE_MIN, SIZE_MAX) if bits.size() > 3 and bits[3].is_valid_float() else 1.0
 	return cfg
 
 
@@ -208,11 +214,11 @@ func _update_pets(delta, net):
 		if not _is_real_player(player):
 			continue
 		if player.get("controlled") == true:
-			wanted["me"] = [player, show_pet, colors]
+			wanted["me"] = [player, show_pet, colors, pet_size]
 		else:
 			var id = player.get("owner_id")
 			if remote_cfg.has(id) and remote_cfg[id]["show"]:
-				wanted[id] = [player, true, remote_cfg[id]["colors"]]
+				wanted[id] = [player, true, remote_cfg[id]["colors"], remote_cfg[id]["size"]]
 
 	for key in pets.keys():
 		var pet = pets[key]
@@ -234,10 +240,11 @@ func _update_pets(delta, net):
 			if pet["area"] != null:
 				pet["area"].pet_key = key
 		var pet = pets[key]
-		var sig = str(wanted[key][2].hash())
+		var sig = str(wanted[key][2].hash()) + "/" + str(wanted[key][3])
 		if pet["sig"] != sig:
 			pet["sig"] = sig
 			_paint(pet, wanted[key][2])
+			_apply_size(pet, wanted[key][3])
 		if pet["pat"] == null:
 			_move_pet(pet, owner_node, delta)
 		# "Pet wolf" is offered while it stands or walks, not while it sits, lies down or is being petted
@@ -277,6 +284,7 @@ func _make_pet(owner_node):
 		shape.translation = Vector3(0, 0.6 * PET_SCALE, 0)
 		area.add_child(shape)
 		node.add_child(area)
+		area.set_meta("shape", shape)
 
 	var anim = model.find_node("AnimationPlayer", true, false)
 	var meshes = []
@@ -299,9 +307,31 @@ func _make_pet(owner_node):
 
 	var pet = {"node": node, "model": model, "anim": anim, "mats": mats, "owner": owner_node,
 		"speed": 0.0, "still": 0.0, "anim_name": "", "sig": "", "moving": false, "sat": 0.0,
-		"area": area, "pat": null, "skeleton": model.find_node("Skeleton", true, false)}
+		"area": area, "pat": null, "skeleton": model.find_node("Skeleton", true, false),
+		"scale": PET_SCALE, "size": 1.0, "side": 0}
 	_play(pet, "wolf_idle", 1.0)
 	return pet
+
+
+func _apply_size(pet, size):
+	size = clamp(float(size), SIZE_MIN, SIZE_MAX)
+	pet["size"] = size
+	pet["scale"] = PET_SCALE * size
+	pet["model"].scale = Vector3.ONE * pet["scale"]
+	var area = pet["area"]
+	if area != null and is_instance_valid(area) and area.has_meta("shape"):
+		var shape = area.get_meta("shape")
+		shape.shape.radius = 0.9 * pet["scale"]
+		shape.translation = Vector3(0, 0.6 * pet["scale"], 0)
+
+
+# how close it stays depends on how big it is
+func _near(pet):
+	return FOLLOW_NEAR * (0.4 + 0.6 * pet["size"])
+
+
+func _far(pet):
+	return _near(pet) + FOLLOW_FAR - FOLLOW_NEAR
 
 
 func _collect_meshes(node, out):
@@ -339,7 +369,7 @@ func _move_pet(pet, owner_node, delta):
 	var dist = flat.length()
 
 	if dist > TELEPORT_DIST:
-		var back = Vector3(1.0, 0, 1.0).normalized() * FOLLOW_NEAR
+		var back = Vector3(1.0, 0, 1.0).normalized() * _near(pet)
 		node.global_transform.origin = _ground(node, target + back, _feet_y(owner_node))
 		pet["speed"] = 0.0
 		pet["still"] = 0.0
@@ -348,13 +378,19 @@ func _move_pet(pet, owner_node, delta):
 		return
 
 	# walk when it fell behind, stop again once it is close; it hurries when far away
-	if dist > FOLLOW_FAR:
+	# when its owner sits down it comes to lie beside them
+	if _is_sitting(owner_node):
+		_lie_beside(pet, owner_node, delta)
+		return
+	pet["side"] = 0
+
+	if dist > _far(pet):
 		pet["moving"] = true
-	elif dist < FOLLOW_NEAR:
+	elif dist < _near(pet):
 		pet["moving"] = false
 	var want = 0.0
 	if pet["moving"]:
-		want = clamp((dist - FOLLOW_NEAR) * 2.2, WALK_SPEED * 0.6, RUN_SPEED)
+		want = clamp((dist - _near(pet)) * 2.2, WALK_SPEED * 0.6, RUN_SPEED)
 	pet["speed"] = lerp(pet["speed"], want, clamp(delta * 6.0, 0.0, 1.0))
 
 	var dir = flat / dist if dist > 0.001 else Vector3()
@@ -387,6 +423,34 @@ func _move_pet(pet, owner_node, delta):
 			_play(pet, "wolf_lie", 1.0)
 		else:
 			_play(pet, "wolf_sit" if pet["still"] > SIT_AFTER else "wolf_idle", 1.0)
+
+
+# walks to the owner's side (whichever side it is already on), turns the way they face and lies down
+func _lie_beside(pet, owner_node, delta):
+	var node = pet["node"]
+	var here = owner_node.global_transform.origin
+	var f = _facing(owner_node)
+	var right = f.cross(Vector3.UP).normalized()
+	var pos = node.global_transform.origin
+	if pet["side"] == 0:
+		pet["side"] = 1 if (pos - here).dot(right) >= 0 else -1
+	var spot = here + right * pet["side"] * (0.35 * _player_size(owner_node) + 0.42 * pet["scale"])
+	var to = Vector3(spot.x - pos.x, 0, spot.z - pos.z)
+	var dist = to.length()
+	if dist > 0.08:
+		pet["speed"] = lerp(pet["speed"], clamp(dist * 3.0, 1.2, WALK_SPEED), clamp(delta * 6.0, 0.0, 1.0))
+		pos += to / dist * min(pet["speed"] * delta, dist)
+		node.global_transform.origin = _ground(node, pos, _feet_y(owner_node), pos.y, delta)
+		node.rotation.y = lerp_angle(node.rotation.y, atan2(-to.x, -to.z), clamp(delta * 10.0, 0.0, 1.0))
+		pet["sat"] = 0.0
+		pet["still"] = 0.0
+		_play(pet, "wolf_walk", clamp(0.6 + pet["speed"] * 0.45, 0.8, 4.2))
+		return
+	pet["speed"] = 0.0
+	node.global_transform.origin = _ground(node, spot, _feet_y(owner_node), pos.y, delta)
+	node.rotation.y = lerp_angle(node.rotation.y, atan2(-f.x, -f.z), clamp(delta * 5.0, 0.0, 1.0))
+	pet["sat"] += delta
+	_play(pet, "wolf_lie" if pet["sat"] > LIE_AFTER else "wolf_idle", 1.0)
 
 
 func _is_sitting(player):
@@ -494,7 +558,7 @@ func _start_pat(petter_key, petter, pet_key):
 			_drop_pat(k)
 	pats[petter_key] = {"petter": petter, "pet_key": pet_key, "phase": "approach", "t": 0.0, "w": 0.0,
 		"start": petter.global_transform.origin, "lean": 0.0, "neck": 0.0, "low": false,
-		"head_off": 0.75 * PET_SCALE}
+		"head_off": 0.75 * pets[pet_key]["scale"]}
 	pets[pet_key]["pat"] = petter_key
 
 
@@ -622,9 +686,10 @@ func _pose_pat(pat, pet, petter, size):
 	var wolf_axis = Vector3.UP.cross(wolf_fwd).normalized() # turning about this moves the head down
 	var g_neck = ws.get_bone_global_pose_no_override(neck)
 	var pivot = WW.xform(g_neck.origin)
-	var forehead = WW.xform(ws.get_bone_global_pose_no_override(head).origin) + wolf_fwd * 0.14 * PET_SCALE + Vector3.UP * 0.27 * PET_SCALE
+	var ps = pet["scale"]
+	var forehead = WW.xform(ws.get_bone_global_pose_no_override(head).origin) + wolf_fwd * 0.14 * ps + Vector3.UP * 0.27 * ps
 	var want_y = shoulder_w.y - 0.05 * size
-	if want_y < 0.55 * PET_SCALE / 0.82:
+	if want_y < 0.55 * ps / 0.82:
 		pat["low"] = true
 	var best = 0.0
 	var best_cost = 1e9
@@ -643,7 +708,7 @@ func _pose_pat(pat, pet, petter, size):
 	# where the hand goes: the top of the head, stroking back and forth along it
 	var stroke = sin(pat["t"] * TAU * 1.3)
 	var target_w = pivot + (forehead - pivot).rotated(wolf_axis, neck_rad)
-	target_w += -wolf_fwd * (0.06 * PET_SCALE * stroke) + Vector3.UP * (0.02 * PET_SCALE * abs(stroke))
+	target_w += -wolf_fwd * (0.06 * ps * stroke) + Vector3.UP * (0.02 * ps * abs(stroke))
 	pat["target_w"] = target_w
 	var head_point = pivot + (forehead - pivot).rotated(wolf_axis, neck_rad)
 	var node_pos = pet["node"].global_transform.origin
@@ -742,6 +807,30 @@ func _build_ui():
 	show_box.add_color_override("font_color_pressed", Color(1, 1, 1))
 	show_box.connect("toggled", self, "_on_show_toggled")
 	column.add_child(show_box)
+
+	var size_row = HBoxContainer.new()
+	size_row.add_constant_override("separation", 8)
+	column.add_child(size_row)
+	var size_name = Label.new()
+	size_name.text = "Size"
+	size_name.add_color_override("font_color", Color(1, 1, 1))
+	size_row.add_child(size_name)
+	size_slider = HSlider.new()
+	size_slider.min_value = SIZE_MIN
+	size_slider.max_value = SIZE_MAX
+	size_slider.step = 0.05
+	size_slider.value = 1.0
+	size_slider.focus_mode = Control.FOCUS_NONE
+	size_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	size_slider.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	size_slider.connect("value_changed", self, "_on_size_changed")
+	size_row.add_child(size_slider)
+	size_label = Label.new()
+	size_label.text = "100%"
+	size_label.rect_min_size = Vector2(42, 0)
+	size_label.align = Label.ALIGN_RIGHT
+	size_label.add_color_override("font_color", Color(1, 1, 1))
+	size_row.add_child(size_label)
 
 	var preset_row = HBoxContainer.new()
 	preset_row.add_constant_override("separation", 6)
@@ -919,6 +1008,18 @@ func _apply_to_pickers():
 		show_box.set_block_signals(false)
 	for key in pickers.keys():
 		pickers[key].color = Color(colors[key])
+	if size_slider != null:
+		size_slider.set_block_signals(true)
+		size_slider.value = pet_size
+		size_slider.set_block_signals(false)
+		size_label.text = str(int(round(pet_size * 100))) + "%"
+
+
+func _on_size_changed(value):
+	pet_size = clamp(value, SIZE_MIN, SIZE_MAX)
+	size_label.text = str(int(round(pet_size * 100))) + "%"
+	sync_dirty = true
+	_save_config()
 
 
 func _on_show_toggled(on):
@@ -1131,6 +1232,8 @@ func _load_config():
 		paw.rect_position = Vector2(float(data["x"]), float(data["y"]))
 	if data.has("show"):
 		show_pet = bool(data["show"])
+	if data.has("size"):
+		pet_size = clamp(float(data["size"]), SIZE_MIN, SIZE_MAX)
 	if typeof(data.get("palettes")) == TYPE_DICTIONARY:
 		for name in data["palettes"].keys():
 			if typeof(data["palettes"][name]) == TYPE_DICTIONARY and palettes.size() < MAX_PALETTES:
@@ -1148,5 +1251,5 @@ func _save_config():
 	var file = File.new()
 	if file.open(CONFIG_PATH, File.WRITE) != OK:
 		return
-	file.store_string(to_json({"x": paw.rect_position.x, "y": paw.rect_position.y, "show": show_pet, "colors": colors, "palettes": palettes}))
+	file.store_string(to_json({"x": paw.rect_position.x, "y": paw.rect_position.y, "show": show_pet, "size": pet_size, "colors": colors, "palettes": palettes}))
 	file.close()

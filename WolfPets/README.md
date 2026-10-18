@@ -14,6 +14,7 @@ Needs [GDWeave](https://github.com/NotNite/GDWeave). Copy the `WolfPets` folder 
 - A small **paw button** sits on the left of the screen. Drag it anywhere, it remembers where.
 - Click it to open the pet menu:
   - **Show my wolf** turns your wolf on or off.
+  - **Size** makes your wolf anywhere from 50% to 150% of its normal size (others see it too).
   - **Grey / White / Black** are ready-made looks.
   - Pick your own colour for the fur, back, belly & paws, eyes, nose & mouth, and ears & tongue.
   - Type a name and press **Save** to keep the current colours as a palette (up to 12). Click a saved
@@ -29,7 +30,7 @@ head. The pose fits your size: the wolf raises its head for a big player and low
 for a small one, and you lean forward, straighten up or reach up as needed. Moving or sitting stops
 it. Other players with the mod see the petting too.
 
-When you sit down, your wolf lies down next to you.
+When you sit down, your wolf walks to your side and lies down beside you, facing the same way.
 
 ## Building
 
