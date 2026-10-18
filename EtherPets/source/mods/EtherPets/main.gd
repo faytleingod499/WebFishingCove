@@ -6,7 +6,7 @@ extends Node
 # its colours. Your choices are shared through the Steam lobby, so other players who have this mod
 # see your pet exactly as you made it. Players without the mod do not see pets. Works on any server.
 
-const VERSION = "2.8.0"
+const VERSION = "2.8.1"
 const CONFIG_PATH = "user://etherpets.json"
 const OLD_CONFIG_PATH = "user://wolfpets.json" # from when it was Wolf Pets
 const SHADOW_PATH = "res://Scenes/Entities/Shadow/shadow.tscn"
@@ -38,7 +38,7 @@ const SIT_AFTER = 5.0      # seconds of standing still before it sits down
 const PARTS = [
 	["fur", "Fur", "pet_fur"],
 	["back", "Back", "pet_dark"],
-	["belly", "Belly & muzzle", "pet_light"],
+	["belly", "Belly", "pet_light"],
 	["eyes", "Eyes", "pet_eye"],
 	["nose", "Nose", "pet_black"],
 	["ears", "Inner ears", "pet_ear_inner"],
@@ -50,10 +50,11 @@ const PARTS = [
 	["tongue", "Tongue", "pet_tongue"],
 	["shine", "Eye shine", "pet_white"],
 	["whiskers", "Whiskers", "pet_whiskers"],
+	["muzzle", "Muzzle", "pet_muzzle"],
 ]
 # a part with no colour of its own (an older palette, or someone on an older version) takes
 # the colour of the part it used to share, or a fixed colour ("#...")
-const DERIVE = {"paws": "belly", "tail": "back", "mask": "back", "earback": "back", "mouth": "nose",
+const DERIVE = {"paws": "belly", "muzzle": "belly", "tail": "back", "mask": "back", "earback": "back", "mouth": "nose",
 	"tongue": "ears", "shine": "#ffffff", "whiskers": "#f2f2f2"}
 
 # every kind of pet: its model, how big it is, its noises, and its ready-made looks.
@@ -65,7 +66,7 @@ const SPECIES_ORDER = ["wolf", "cat", "raccoon"]
 const SPECIES = {
 	"wolf": {
 		"label": "Wolf", "model": "res://mods/EtherPets/wolf.scn", "scale": 0.82, "move": "walk", "sit": "beside",
-		"parts": ["fur", "back", "belly", "paws", "tail", "earback", "eyes", "shine", "nose", "mouth", "ears", "tongue"],
+		"parts": ["fur", "back", "belly", "muzzle", "paws", "tail", "earback", "eyes", "shine", "nose", "mouth", "ears", "tongue"],
 		"pet_sound": "res://Sounds/dog_whine.ogg", "pet_pitch": 1.2,       # a happy whine
 		"call_sound": "res://mods/EtherPets/howl.wav", "call_pitch": 1.0, # a short howl
 		"call_time": 2.0, "call_lift": 40.0,                               # nose to the sky
@@ -77,7 +78,7 @@ const SPECIES = {
 	},
 	"cat": {
 		"label": "Cat", "model": "res://mods/EtherPets/cat.scn", "scale": 0.55, "move": "walk", "sit": "lap",
-		"parts": ["fur", "back", "belly", "paws", "tail", "eyes", "shine", "nose", "mouth", "ears", "whiskers"],
+		"parts": ["fur", "back", "belly", "muzzle", "paws", "tail", "eyes", "shine", "nose", "mouth", "ears", "whiskers"],
 		"pet_sound": "res://Sounds/cat_purr.ogg", "pet_pitch": 1.0,       # a purr
 		"call_sound": "res://Sounds/cat_meow.ogg", "call_pitch": 1.1,     # a meow back
 		"call_time": 0.9, "call_lift": 18.0,
@@ -89,8 +90,8 @@ const SPECIES = {
 	},
 	"raccoon": {
 		"label": "Raccoon", "model": "res://mods/EtherPets/raccoon.scn", "scale": 0.6, "move": "roll", "sit": "head",
-		"parts": ["fur", "mask", "belly", "paws", "tail", "eyes", "shine", "nose", "mouth", "ears"],
-		"labels": {"paws": "Legs & paws", "tail": "Tail rings", "belly": "Belly & face"},
+		"parts": ["fur", "mask", "belly", "muzzle", "paws", "tail", "eyes", "shine", "nose", "mouth", "ears"],
+		"labels": {"paws": "Legs & paws", "tail": "Tail rings", "muzzle": "Face"},
 		"derive": {"paws": "back"},                                        # its dark legs were "back" before
 		"roll_dist": 2.8,                                                 # one somersault, curled up and back onto its feet
 		"anims": {"wolf_sit": "raccoon_sit", "wolf_lie": "raccoon_flop"}, # its own loaf and sprawl

@@ -21,9 +21,9 @@ Press **P** or click the **paw button** (drag it anywhere, it remembers where) t
 - **Answer when I bark**: your pet answers your bark or meow (modded species too). **Wait** sets how long
   it waits before answering again, from 15 seconds to 10 minutes.
 - **Size** from 50% to 150%.
-- Ready-made looks for each pet, plus a colour picker for every part: fur, back, belly, paws, tail tip,
-  ear backs, eyes, eye shine, nose, mouth, inner ears and tongue (the raccoon's mask and tail rings, the
-  cat's whiskers).
+- Ready-made looks for each pet, plus a colour picker for every part: fur, back, belly, muzzle, paws, tail tip,
+  ear backs, eyes, eye shine, nose, mouth, inner ears and tongue (the raccoon's mask, face and tail rings,
+  the cat's whiskers).
 - Type a name and press **Save** to keep a palette (up to 12). The palette's name floats above your pet.
   Palettes work on any kind of pet.
 

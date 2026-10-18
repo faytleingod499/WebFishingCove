@@ -1,5 +1,5 @@
-## 2.8.0
-- Every part can now be coloured on its own: paws, tail tip / tail rings, ear backs, the raccoon's mask,
+## 2.8.1
+- Every part can now be coloured on its own: muzzle, paws, tail tip / tail rings, ear backs, the raccoon's mask,
   mouth, tongue, eye shine and the cat's whiskers, as well as fur, back, belly, eyes, nose and inner ears.
   The colour menu shows only the parts your kind of pet has. Older palettes still work.
 
