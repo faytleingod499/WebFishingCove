@@ -1,3 +1,7 @@
+## 2.8.4
+- The wolf and cat now sit with their rump on the ground (it hovered above it, very visible on big pets).
+  The back legs fold into haunches so the paws stay planted.
+
 ## 2.8.3
 - Fixed: after joining a server, other players sometimes didn't see your pet until you turned it off and on
   again. Your pet is now re-sent until the lobby has it.
