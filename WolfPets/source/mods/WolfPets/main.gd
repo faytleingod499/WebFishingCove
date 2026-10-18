@@ -6,7 +6,7 @@ extends Node
 # Your colours are shared through the Steam lobby, so other players who have this mod see your wolf
 # exactly as you made it. Players without the mod do not see pets at all. Works on any server.
 
-const VERSION = "1.3.0"
+const VERSION = "1.3.1"
 const CONFIG_PATH = "user://wolfpets.json"
 const MODEL_PATH = "res://mods/WolfPets/wolf_pet.scn"
 const SHADOW_PATH = "res://Scenes/Entities/Shadow/shadow.tscn"
@@ -434,7 +434,8 @@ func _lie_beside(pet, owner_node, delta):
 	var pos = node.global_transform.origin
 	if pet["side"] == 0:
 		pet["side"] = 1 if (pos - here).dot(right) >= 0 else -1
-	var spot = here + right * pet["side"] * (0.35 * _player_size(owner_node) + 0.42 * pet["scale"])
+	# set back by the length of its neck and head, so its head lies level with its owner
+	var spot = here + right * pet["side"] * (0.35 * _player_size(owner_node) + 0.42 * pet["scale"]) - f * 0.85 * pet["scale"]
 	var to = Vector3(spot.x - pos.x, 0, spot.z - pos.z)
 	var dist = to.length()
 	if dist > 0.08:
