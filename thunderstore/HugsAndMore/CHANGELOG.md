@@ -1,3 +1,7 @@
+## 1.2.4
+- Fixed: the kiss sound was too quiet to hear. Kiss and high five now play the game's own sounds through
+  both players, just like the game's K emote and punch.
+
 ## 1.2.3
 - Hug: each of you steps a little to your own left and tips your head further that way, so your heads rest
   past each other side by side instead of merging.

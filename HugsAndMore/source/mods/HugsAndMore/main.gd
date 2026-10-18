@@ -15,7 +15,7 @@ extends Node
 # Everything goes through the Steam lobby member data ("hugsandmore"), so every player with the mod sees
 # it. Players without the mod see nothing unusual.
 
-const VERSION = "1.2.3"
+const VERSION = "1.2.4"
 const SYNC_KEY = "hugsandmore"   # "1;<seq>;<ask|yes>;<emote>;<target steam id>;<the seq it answers>"
 const SKELETON_PATH = "body/player_body/Armature/Skeleton"
 const POPUP_ID = "HUGSANDMORE"
@@ -634,7 +634,9 @@ func _pose_kiss(p):
 	if p["t"] >= 0.55 and not p["slapped"]:
 		p["slapped"] = true
 		var at = Vector3(mid.x, min(_head_y(p["pa"]), _head_y(p["pb"])) + 0.55 * min(sa, sb), mid.z)   # about where the faces meet
-		_play_sound(p["pa"], kiss_sound, at, 1.0, 0.0)
+		# the game's own kiss sound, the same one the K emote plays, from both of them
+		for node in [p["pa"], p["pb"]]:
+			_game_sound(node, "kiss", 1.0, kiss_sound, at)
 		_hearts(p["pa"], at + Vector3.UP * 0.4 * min(sa, sb))
 		for node in [p["pa"], p["pb"]]:
 			if is_instance_valid(node) and node.has_method("_face_emote"):
@@ -687,7 +689,19 @@ func _hearts(node, at):
 
 
 func _play_slap(node, at):
-	_play_sound(node, slap_sound, at, 1.5, -2.0)
+	_game_sound(node, "punch", 1.5, slap_sound, at)
+
+
+# plays one of the sounds every player already carries (sound_manager/<id>), with the game's own volume
+# and range; only if that's missing, a sound of my own
+func _game_sound(node, id, pitch, fallback, at):
+	if not is_instance_valid(node):
+		return
+	var manager = node.get_node_or_null("sound_manager")
+	if manager != null and manager.get_node_or_null(id) != null and manager.has_method("_play_sound"):
+		manager._play_sound(id, null, pitch)
+		return
+	_play_sound(node, fallback, at, pitch, 0.0)
 
 
 func _play_sound(node, sound, at, pitch, db):
@@ -697,7 +711,10 @@ func _play_sound(node, sound, at, pitch, db):
 	player.stream = sound
 	player.pitch_scale = pitch
 	player.unit_db = db
+	player.unit_size = 2.6
 	player.max_distance = 30.0
+	if AudioServer.get_bus_index("SFX") >= 0:
+		player.bus = "SFX"
 	node.add_child(player)
 	player.global_transform.origin = at
 	player.connect("finished", player, "queue_free")
