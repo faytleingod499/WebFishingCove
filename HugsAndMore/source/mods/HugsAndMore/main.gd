@@ -15,7 +15,7 @@ extends Node
 # Everything goes through the Steam lobby member data ("hugsandmore"), so every player with the mod sees
 # it. Players without the mod see nothing unusual.
 
-const VERSION = "1.2.0"
+const VERSION = "1.2.1"
 const SYNC_KEY = "hugsandmore"   # "1;<seq>;<ask|yes>;<emote>;<target steam id>;<the seq it answers>"
 const SKELETON_PATH = "body/player_body/Armature/Skeleton"
 const POPUP_ID = "HUGSANDMORE"
@@ -608,7 +608,7 @@ func _pose_kiss(p):
 	var mid = frame[1]
 	var sa = _player_size(p["pa"])
 	var sb = _player_size(p["pb"])
-	var gap = 0.5 * (sa + sb) / 2.0           # far enough apart that they have to lean in
+	var gap = 0.95 * (sa + sb) / 2.0          # the heads are big: stand well apart and lean in
 	var meet_y = min(_head_y(p["pa"]), _head_y(p["pb"])) + 0.03 * min(sa, sb)
 	var lean = smoothstep(0.0, 0.5, p["t"])
 	_kiss_one(p["pa"], dir, mid, gap, sa, meet_y, lean, p["w"])
@@ -637,7 +637,8 @@ func _kiss_one(me_node, dir, mid, gap, s_me, meet_y, lean, w):
 	var axis_w = Vector3.UP.cross(dir).normalized()          # turning about this tips me forward
 	var axis = body["Winv"].basis.xform(axis_w).normalized()
 	# meet_y is about face height; the head bone sits a little below that
-	var want = body["Winv"].xform(Vector3(mid.x, meet_y - 0.3 * s_me, mid.z) - dir * 0.09 * s_me)
+	# and the head bone stays this far back from the middle, so the two big heads just touch at the snouts
+	var want = body["Winv"].xform(Vector3(mid.x, meet_y - 0.3 * s_me, mid.z) - dir * 0.3 * s_me)
 	# how far to lean so my face gets to the meeting point
 	var best = 0.0
 	var best_cost = 1e9
