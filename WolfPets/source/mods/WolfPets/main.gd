@@ -6,7 +6,7 @@ extends Node
 # Your colours are shared through the Steam lobby, so other players who have this mod see your wolf
 # exactly as you made it. Players without the mod do not see pets at all. Works on any server.
 
-const VERSION = "1.5.0"
+const VERSION = "1.5.1"
 const CONFIG_PATH = "user://wolfpets.json"
 const MODEL_PATH = "res://mods/WolfPets/wolf_pet.scn"
 const SHADOW_PATH = "res://Scenes/Entities/Shadow/shadow.tscn"
@@ -342,7 +342,9 @@ func _place_label(pet, name):
 	var label = pet["label"]
 	if label == null or not is_instance_valid(label):
 		return
-	var camera = get_viewport().get_camera()
+	# the game draws the world inside its own viewport, so the camera (and the spot on screen) is there
+	var world_view = pet["node"].get_viewport()
+	var camera = world_view.get_camera() if world_view != null else null
 	var hud = _get_hud()
 	if name == "" or camera == null or not pet["node"].is_visible_in_tree() or (hud != null and hud.get("hud_hidden") == true):
 		label.visible = false
@@ -362,7 +364,12 @@ func _place_label(pet, name):
 	label.rect_scale = Vector2(s, s)
 	var size = label.get_combined_minimum_size()
 	label.rect_size = size
-	label.rect_position = camera.unproject_position(top) - Vector2(size.x * s / 2.0, size.y * s)
+	var at = camera.unproject_position(top)
+	var holder = world_view.get_parent()
+	if holder is ViewportContainer and world_view.size.x > 0 and world_view.size.y > 0:
+		var box = holder.get_global_rect()
+		at = box.position + at * (box.size / world_view.size)
+	label.rect_position = at - Vector2(size.x * s / 2.0, size.y * s)
 	label.visible = true
 
 
@@ -1338,6 +1345,16 @@ func _load_config():
 			var text = str(data["colors"].get(part[0], ""))
 			if text.is_valid_html_color():
 				colors[part[0]] = text
+	if pet_name == "":
+		# saved before names existed: if its colours are one of the saved palettes, take that name
+		for key in palettes.keys():
+			var same = true
+			for part in PARTS:
+				if str(palettes[key].get(part[0], "")).to_lower() != str(colors.get(part[0], "")).to_lower():
+					same = false
+			if same:
+				_set_pet_name(key)
+				break
 	sync_dirty = true
 
 
