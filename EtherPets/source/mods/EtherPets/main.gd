@@ -6,7 +6,7 @@ extends Node
 # its colours. Your choices are shared through the Steam lobby, so other players who have this mod
 # see your pet exactly as you made it. Players without the mod do not see pets. Works on any server.
 
-const VERSION = "2.7.4"
+const VERSION = "2.7.5"
 const CONFIG_PATH = "user://etherpets.json"
 const OLD_CONFIG_PATH = "user://wolfpets.json" # from when it was Wolf Pets
 const SHADOW_PATH = "res://Scenes/Entities/Shadow/shadow.tscn"
@@ -1645,8 +1645,7 @@ func _on_use_palette(name):
 			colors[part[0]] = text
 	name_field.text = name # so saving again updates it
 	_set_pet_name(name)
-	if SPECIES.has(str(palettes[name].get("species", ""))):
-		_set_species(str(palettes[name]["species"]), true)
+	# only the colours and name: the pet stays the kind it is (a palette made on a wolf can dress a cat)
 	_apply_to_pickers()
 	sync_dirty = true
 	_save_config()
