@@ -6,7 +6,7 @@ extends Node
 # Your colours are shared through the Steam lobby, so other players who have this mod see your wolf
 # exactly as you made it. Players without the mod do not see pets at all. Works on any server.
 
-const VERSION = "1.2.0"
+const VERSION = "1.2.1"
 const CONFIG_PATH = "user://wolfpets.json"
 const MODEL_PATH = "res://mods/WolfPets/wolf_pet.scn"
 const SHADOW_PATH = "res://Scenes/Entities/Shadow/shadow.tscn"
@@ -362,8 +362,10 @@ func _move_pet(pet, owner_node, delta):
 	pos = _ground(node, pos, _feet_y(owner_node), pos.y, delta)
 	node.global_transform.origin = pos
 
-	# turn to where it walks, or to its owner while standing
-	if dist > 0.05:
+	# turn to where it walks, or to its owner while standing; once it sits or lies down it stays
+	# put until it gets up to follow, so its owner can sit right beside it
+	var settled = pet["anim_name"] == "wolf_sit" or pet["anim_name"] == "wolf_lie"
+	if dist > 0.05 and (pet["speed"] > 0.3 or not settled):
 		var yaw = atan2(-dir.x, -dir.z)
 		node.rotation.y = lerp_angle(node.rotation.y, yaw, clamp(delta * (8.0 if pet["speed"] > 0.3 else 3.0), 0.0, 1.0))
 
