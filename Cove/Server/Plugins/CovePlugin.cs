@@ -171,13 +171,16 @@ namespace Cove.Server.Plugins
 
         public void RegisterCommand(string command, Action<WFPlayer, string[]> callback, string[]? aliases = null)
         {
+            bool existed = ParentServer.DoseCommandExist(command);
             ParentServer.RegisterCommand(command, callback, aliases);
+            if (!existed)
+                ParentServer.SetCommandOwner(command.ToLower(), this);
         }
 
         /// Back-compat overload for existing plugins compiled against the older API
         public void RegisterCommand(string command, Action<WFPlayer, string[]> callback)
         {
-            ParentServer.RegisterCommand(command, callback);
+            RegisterCommand(command, callback, null);
         }
 
         public void SetCommandDescription(string command, string description)
@@ -185,9 +188,10 @@ namespace Cove.Server.Plugins
             ParentServer.SetCommandDescription(command, description);
         }
 
+        /// <summary>Removes a command this plugin added. The server's own commands and other plugins' are left alone.</summary>
         public void UnregisterCommand(string command)
         {
-            ParentServer.UnregisterCommand(command);
+            ParentServer.UnregisterCommand(command.ToLower(), this);
         }
 
         /// <summary>Who the command is for. !help only lists the commands the player can use. Defaults to everyone.</summary>

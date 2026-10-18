@@ -26,6 +26,8 @@ namespace Cove.Server
         public string Description;
         public Action<WFPlayer, string[]> Callback;
         public string[] Aliases;
+        /// <summary>The plugin that added this command, or null for the server's own commands.</summary>
+        public object? Owner;
 
         public RegisteredCommand(string command, string description, Action<WFPlayer, string[]> callback, string[]? aliases = null)
         {
@@ -337,6 +339,25 @@ namespace Cove.Server
         public void UnregisterCommand(string command)
         {
             Commands.RemoveAll(c => c.Command == command);
+        }
+
+        /// <summary>
+        /// Removes a command only if this owner added it, so a plugin can never take away the server's own
+        /// commands (kick, ban, ...) or another plugin's when it stops or is reloaded.
+        /// </summary>
+        public void UnregisterCommand(string command, object owner)
+        {
+            int removed = Commands.RemoveAll(c => c.Command == command && ReferenceEquals(c.Owner, owner));
+            if (removed == 0 && Commands.Any(c => c.Command == command))
+                Log($"A plugin tried to remove the command '{command}', which it did not add. It was left in place.");
+        }
+
+        /// <summary>Marks who added a command (only the first owner counts).</summary>
+        public void SetCommandOwner(string command, object owner)
+        {
+            var cmd = Commands.Find(c => c.Command == command);
+            if (cmd != null && cmd.Owner == null)
+                cmd.Owner = owner;
         }
 
         public void SetCommandDescription(string command, string description)

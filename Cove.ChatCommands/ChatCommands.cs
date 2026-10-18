@@ -331,15 +331,11 @@ public class ChatCommands : CovePlugin
         // this is needed to allow for the plugin to be reloaded!
         UnregisterCommand("users");
         UnregisterCommand("spawn");
-        UnregisterCommand("kick");
-        UnregisterCommand("ban");
-        UnregisterCommand("unban");
         UnregisterCommand("setjoinable");
         UnregisterCommand("refreshadmins");
         UnregisterCommand("uptime");
         UnregisterCommand("say");
         UnregisterCommand("chalkrecent");
-        UnregisterCommand("reload");
         UnregisterCommand("plugins");
         UnregisterCommand("steam");
         UnregisterCommand("joinmessage");
