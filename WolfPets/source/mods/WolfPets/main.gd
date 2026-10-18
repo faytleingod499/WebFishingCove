@@ -6,7 +6,7 @@ extends Node
 # Your colours are shared through the Steam lobby, so other players who have this mod see your wolf
 # exactly as you made it. Players without the mod do not see pets at all. Works on any server.
 
-const VERSION = "1.4.0"
+const VERSION = "1.5.0"
 const CONFIG_PATH = "user://wolfpets.json"
 const MODEL_PATH = "res://mods/WolfPets/wolf_pet.scn"
 const SHADOW_PATH = "res://Scenes/Entities/Shadow/shadow.tscn"
@@ -424,7 +424,18 @@ func _move_pet(pet, owner_node, delta):
 	var flat = Vector3(target.x - pos.x, 0, target.z - pos.z)
 	var dist = flat.length()
 
-	if dist > TELEPORT_DIST:
+	# how fast its owner is going (anything that speeds them up, running, flying, boosts),
+	# so it can match it; a sudden jump across the map is a teleport, not speed
+	var last = pet.get("owner_last")
+	pet["owner_last"] = target
+	if last != null and delta > 0.0:
+		var v = Vector2(target.x - last.x, target.z - last.z).length() / delta
+		if v < 200.0:
+			pet["owner_speed"] = lerp(pet.get("owner_speed", 0.0), v, clamp(delta * 5.0, 0.0, 1.0))
+	var owner_speed = pet.get("owner_speed", 0.0)
+
+	# it only gives up and pops back next to its owner when it really cannot keep up
+	if dist > max(TELEPORT_DIST, owner_speed * 2.5):
 		var back = Vector3(1.0, 0, 1.0).normalized() * _near(pet)
 		node.global_transform.origin = _ground(node, target + back, _feet_y(owner_node))
 		pet["speed"] = 0.0
@@ -446,8 +457,10 @@ func _move_pet(pet, owner_node, delta):
 		pet["moving"] = false
 	var want = 0.0
 	if pet["moving"]:
-		want = clamp((dist - _near(pet)) * 2.2, WALK_SPEED * 0.6, RUN_SPEED)
-	pet["speed"] = lerp(pet["speed"], want, clamp(delta * 6.0, 0.0, 1.0))
+		# its owner's own speed plus a bit more the further behind it is, no upper limit but theirs
+		var top = max(RUN_SPEED, owner_speed * 1.3 + 3.0)
+		want = clamp((dist - _near(pet)) * 2.2 + owner_speed * 0.9, WALK_SPEED * 0.6, top)
+	pet["speed"] = lerp(pet["speed"], want, clamp(delta * (6.0 + pet["speed"] * 0.2), 0.0, 1.0))
 
 	var dir = flat / dist if dist > 0.001 else Vector3()
 	if pet["speed"] > 0.05:
@@ -466,8 +479,7 @@ func _move_pet(pet, owner_node, delta):
 	if pet["speed"] > 0.35:
 		pet["still"] = 0.0
 		# the legs speed up with it, quicker still when it runs
-		var rate = clamp(0.6 + pet["speed"] * 0.45, 0.8, 4.2)
-		_play(pet, "wolf_walk", rate)
+		_play(pet, "wolf_walk", _stride_rate(pet["speed"]))
 	else:
 		pet["still"] += delta
 		# lies down next to its owner while they sit, otherwise sits after a while
@@ -501,13 +513,20 @@ func _lie_beside(pet, owner_node, delta):
 		node.rotation.y = lerp_angle(node.rotation.y, atan2(-to.x, -to.z), clamp(delta * 10.0, 0.0, 1.0))
 		pet["sat"] = 0.0
 		pet["still"] = 0.0
-		_play(pet, "wolf_walk", clamp(0.6 + pet["speed"] * 0.45, 0.8, 4.2))
+		_play(pet, "wolf_walk", _stride_rate(pet["speed"]))
 		return
 	pet["speed"] = 0.0
 	node.global_transform.origin = _ground(node, spot, _feet_y(owner_node), pos.y, delta)
 	node.rotation.y = lerp_angle(node.rotation.y, atan2(-f.x, -f.z), clamp(delta * 5.0, 0.0, 1.0))
 	pet["sat"] += delta
 	_play(pet, "wolf_lie" if pet["sat"] > LIE_AFTER else "wolf_idle", 1.0)
+
+
+# how fast the legs go: in step with a walk or a run, and still quicker (but not silly) when it races
+func _stride_rate(speed):
+	if speed <= RUN_SPEED:
+		return clamp(0.6 + speed * 0.45, 0.8, 4.2)
+	return min(4.0 + (speed - RUN_SPEED) * 0.15, 9.0)
 
 
 func _is_sitting(player):
