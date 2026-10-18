@@ -6,7 +6,7 @@ extends Node
 # its colours. Your choices are shared through the Steam lobby, so other players who have this mod
 # see your pet exactly as you made it. Players without the mod do not see pets. Works on any server.
 
-const VERSION = "2.7.5"
+const VERSION = "2.8.0"
 const CONFIG_PATH = "user://etherpets.json"
 const OLD_CONFIG_PATH = "user://wolfpets.json" # from when it was Wolf Pets
 const SHADOW_PATH = "res://Scenes/Entities/Shadow/shadow.tscn"
@@ -33,15 +33,28 @@ const WALK_SPEED = 3.0
 const RUN_SPEED = 7.5
 const SIT_AFTER = 5.0      # seconds of standing still before it sits down
 
-# the parts that can be coloured: key, label, the model's material for it
+# the parts that can be coloured: key, label, the model's material for it.
+# The first six keep their places (older versions of the mod read the lobby text by position).
 const PARTS = [
 	["fur", "Fur", "pet_fur"],
 	["back", "Back", "pet_dark"],
-	["belly", "Belly & paws", "pet_light"],
+	["belly", "Belly & muzzle", "pet_light"],
 	["eyes", "Eyes", "pet_eye"],
-	["nose", "Nose & mouth", "pet_black"],
-	["ears", "Ears & tongue", "pet_ear_inner"],
+	["nose", "Nose", "pet_black"],
+	["ears", "Inner ears", "pet_ear_inner"],
+	["paws", "Paws", "pet_paws"],
+	["tail", "Tail tip", "pet_tail"],
+	["mask", "Mask", "pet_mask"],
+	["earback", "Ear backs", "pet_ear_back"],
+	["mouth", "Mouth", "pet_mouth"],
+	["tongue", "Tongue", "pet_tongue"],
+	["shine", "Eye shine", "pet_white"],
+	["whiskers", "Whiskers", "pet_whiskers"],
 ]
+# a part with no colour of its own (an older palette, or someone on an older version) takes
+# the colour of the part it used to share, or a fixed colour ("#...")
+const DERIVE = {"paws": "belly", "tail": "back", "mask": "back", "earback": "back", "mouth": "nose",
+	"tongue": "ears", "shine": "#ffffff", "whiskers": "#f2f2f2"}
 
 # every kind of pet: its model, how big it is, its noises, and its ready-made looks.
 # All of them share one skeleton and one set of animations, so the rest of the mod works for each.
@@ -52,6 +65,7 @@ const SPECIES_ORDER = ["wolf", "cat", "raccoon"]
 const SPECIES = {
 	"wolf": {
 		"label": "Wolf", "model": "res://mods/EtherPets/wolf.scn", "scale": 0.82, "move": "walk", "sit": "beside",
+		"parts": ["fur", "back", "belly", "paws", "tail", "earback", "eyes", "shine", "nose", "mouth", "ears", "tongue"],
 		"pet_sound": "res://Sounds/dog_whine.ogg", "pet_pitch": 1.2,       # a happy whine
 		"call_sound": "res://mods/EtherPets/howl.wav", "call_pitch": 1.0, # a short howl
 		"call_time": 2.0, "call_lift": 40.0,                               # nose to the sky
@@ -63,6 +77,7 @@ const SPECIES = {
 	},
 	"cat": {
 		"label": "Cat", "model": "res://mods/EtherPets/cat.scn", "scale": 0.55, "move": "walk", "sit": "lap",
+		"parts": ["fur", "back", "belly", "paws", "tail", "eyes", "shine", "nose", "mouth", "ears", "whiskers"],
 		"pet_sound": "res://Sounds/cat_purr.ogg", "pet_pitch": 1.0,       # a purr
 		"call_sound": "res://Sounds/cat_meow.ogg", "call_pitch": 1.1,     # a meow back
 		"call_time": 0.9, "call_lift": 18.0,
@@ -74,6 +89,9 @@ const SPECIES = {
 	},
 	"raccoon": {
 		"label": "Raccoon", "model": "res://mods/EtherPets/raccoon.scn", "scale": 0.6, "move": "roll", "sit": "head",
+		"parts": ["fur", "mask", "belly", "paws", "tail", "eyes", "shine", "nose", "mouth", "ears"],
+		"labels": {"paws": "Legs & paws", "tail": "Tail rings", "belly": "Belly & face"},
+		"derive": {"paws": "back"},                                        # its dark legs were "back" before
 		"roll_dist": 2.8,                                                 # one somersault, curled up and back onto its feet
 		"anims": {"wolf_sit": "raccoon_sit", "wolf_lie": "raccoon_flop"}, # its own loaf and sprawl
 		"pet_sound": "res://mods/EtherPets/trill.wav", "pet_pitch": 1.0,  # a happy churring trill
@@ -136,6 +154,7 @@ var drag_offset = Vector2()
 var menu
 var show_box
 var pickers = {}
+var picker_labels = {} # part -> its label in the colour grid
 var menu_open = false
 var palettes = {} # name -> colours, the player's own saved looks
 var name_field
@@ -188,14 +207,24 @@ func _reset_colors(preset):
 		index = clamp(int(preset), 0, list.size() - 1)
 	colors = {}
 	for part in PARTS:
-		colors[part[0]] = list[index][1][part[0]]
+		colors[part[0]] = _color_text(list[index][1], part[0], species)
 
 
-func _color_of(cfg_colors, key):
+func _color_of(cfg_colors, key, kind = "wolf"):
+	return Color(_color_text(cfg_colors, key, kind))
+
+
+# a part's colour, or the colour it takes from the part it used to share
+func _color_text(cfg_colors, key, kind = "wolf", depth = 0):
 	var text = str(cfg_colors.get(key, ""))
-	if not text.is_valid_html_color():
-		text = SPECIES["wolf"]["presets"][0][1][key]
-	return Color(text)
+	if text.is_valid_html_color():
+		return text
+	var from = str(SPECIES.get(kind, {}).get("derive", {}).get(key, DERIVE.get(key, "")))
+	if from.begins_with("#"):
+		return from.substr(1)
+	if from != "" and depth < 4:
+		return _color_text(cfg_colors, from, kind, depth + 1)
+	return str(SPECIES["wolf"]["presets"][0][1].get(key, "ffffff"))
 
 
 # what goes into the lobby: "1;1;fur,back,belly,eyes,nose,ears;1.00;Name;1;wolf"
@@ -203,7 +232,7 @@ func _color_of(cfg_colors, key):
 func _sync_text():
 	var list = []
 	for part in PARTS:
-		list.append(str(colors[part[0]]))
+		list.append(_color_text(colors, part[0], species))
 	return "1;" + ("1" if show_pet else "0") + ";" + PoolStringArray(list).join(",") + ";" + ("%.2f" % pet_size) + ";" + _clean_name(pet_name) + ";" + ("1" if howl_on else "0") + ";" + species + ";" + str(answer_cooldown)
 
 
@@ -583,7 +612,7 @@ func _paint(pet, cfg_colors):
 	for part in PARTS:
 		var mat = pet["mats"].get(part[2])
 		if mat != null and mat is SpatialMaterial:
-			mat.albedo_color = _color_of(cfg_colors, part[0])
+			mat.albedo_color = _color_of(cfg_colors, part[0], pet["species"])
 
 
 func _remove_pet(key):
@@ -1292,8 +1321,8 @@ func _build_ui():
 	_rebuild_presets()
 
 	var grid = GridContainer.new()
-	grid.columns = 2
-	grid.add_constant_override("hseparation", 10)
+	grid.columns = 4 # two parts to a row, so the longer lists stay compact
+	grid.add_constant_override("hseparation", 8)
 	grid.add_constant_override("vseparation", 4)
 	column.add_child(grid)
 	for part in PARTS:
@@ -1302,13 +1331,15 @@ func _build_ui():
 		label.add_color_override("font_color", Color(1, 1, 1))
 		grid.add_child(label)
 		var picker = ColorPickerButton.new()
-		picker.rect_min_size = Vector2(64, 22)
+		picker.rect_min_size = Vector2(40, 22)
 		picker.edit_alpha = false
 		picker.focus_mode = Control.FOCUS_NONE
 		picker.connect("color_changed", self, "_on_color_changed", [part[0]])
 		picker.connect("popup_closed", self, "_save_config")
 		grid.add_child(picker)
 		pickers[part[0]] = picker
+		picker_labels[part[0]] = label
+	_update_part_rows()
 
 	# saving the current colours under a name
 	var save_row = HBoxContainer.new()
@@ -1463,7 +1494,7 @@ func _apply_to_pickers():
 		cooldown_label.text = _clock(answer_cooldown)
 		howl_box.set_block_signals(false)
 	for key in pickers.keys():
-		pickers[key].color = Color(colors[key])
+		pickers[key].color = _color_of(colors, key, species)
 	if size_slider != null:
 		size_slider.set_block_signals(true)
 		size_slider.value = pet_size
@@ -1593,7 +1624,7 @@ func _set_species(kind, keep_colors):
 		for i in range(list.size()):
 			var same = true
 			for part in PARTS:
-				if str(list[i][1][part[0]]).to_lower() != str(colors.get(part[0], "")).to_lower():
+				if _color_text(list[i][1], part[0], old).to_lower() != _color_text(colors, part[0], old).to_lower():
 					same = false
 			if same:
 				_reset_colors(min(i, SPECIES[kind]["presets"].size() - 1))
@@ -1601,7 +1632,20 @@ func _set_species(kind, keep_colors):
 				break
 	_style_species_buttons()
 	_rebuild_presets()
+	_update_part_rows()
 	sync_dirty = true
+
+
+# the colour grid shows only the parts this kind of pet has, under its own names for them
+func _update_part_rows():
+	var info = SPECIES[species]
+	for part in PARTS:
+		if not pickers.has(part[0]):
+			continue
+		var shown = info.get("parts", []).has(part[0])
+		pickers[part[0]].visible = shown
+		picker_labels[part[0]].visible = shown
+		picker_labels[part[0]].text = info.get("labels", {}).get(part[0], part[1])
 
 
 func _on_species(kind):
@@ -1640,9 +1684,7 @@ func _on_use_palette(name):
 	if not palettes.has(name):
 		return
 	for part in PARTS:
-		var text = str(palettes[name].get(part[0], ""))
-		if text.is_valid_html_color():
-			colors[part[0]] = text
+		colors[part[0]] = _color_text(palettes[name], part[0], species)
 	name_field.text = name # so saving again updates it
 	_set_pet_name(name)
 	# only the colours and name: the pet stays the kind it is (a palette made on a wolf can dress a cat)
@@ -1827,6 +1869,7 @@ func _load_config():
 		species = str(data["species"])
 		_style_species_buttons()
 		_rebuild_presets()
+		_update_part_rows()
 	if data.has("size"):
 		pet_size = clamp(float(data["size"]), SIZE_MIN, SIZE_MAX)
 	if data.has("name"):
@@ -1837,10 +1880,9 @@ func _load_config():
 				palettes[str(name)] = data["palettes"][name]
 	_rebuild_palettes()
 	if typeof(data.get("colors")) == TYPE_DICTIONARY:
+		# parts saved before they could be coloured on their own take the colour they shared
 		for part in PARTS:
-			var text = str(data["colors"].get(part[0], ""))
-			if text.is_valid_html_color():
-				colors[part[0]] = text
+			colors[part[0]] = _color_text(data["colors"], part[0], species)
 	if pet_name == "":
 		# saved before names existed: if its colours are one of the saved palettes, take that name
 		for key in palettes.keys():
