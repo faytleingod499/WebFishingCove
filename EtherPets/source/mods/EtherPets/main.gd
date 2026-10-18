@@ -6,7 +6,7 @@ extends Node
 # its colours. Your choices are shared through the Steam lobby, so other players who have this mod
 # see your pet exactly as you made it. Players without the mod do not see pets. Works on any server.
 
-const VERSION = "2.8.2"
+const VERSION = "2.8.3"
 const CONFIG_PATH = "user://etherpets.json"
 const OLD_CONFIG_PATH = "user://wolfpets.json" # from when it was Wolf Pets
 const SHADOW_PATH = "res://Scenes/Entities/Shadow/shadow.tscn"
@@ -108,6 +108,7 @@ const SPECIES = {
 }
 
 var steam = null
+var verify_timer = 0.0
 var scenes = {}  # species -> its model scene
 var sounds = {}  # path -> loaded sound
 var shadow_scene = null
@@ -275,6 +276,13 @@ func _process(delta):
 	if lobby != synced_lobby:
 		synced_lobby = lobby
 		sync_dirty = true
+	# what I wrote may not have stuck: a write made while still joining the lobby is dropped by Steam,
+	# and then nobody sees my pet until I change something. So every few seconds read it back and resend.
+	verify_timer += delta
+	if verify_timer >= 3.0 and lobby > 0 and steam != null and steam.has_method("getLobbyMemberData") and net != null:
+		verify_timer = 0.0
+		if str(steam.getLobbyMemberData(lobby, int(net.STEAM_ID), SYNC_KEY)) != _sync_text():
+			sync_dirty = true
 	if sync_dirty and sync_timer >= 1.0 and lobby > 0 and steam != null and steam.has_method("setLobbyMemberData"):
 		sync_timer = 0.0
 		sync_dirty = false
