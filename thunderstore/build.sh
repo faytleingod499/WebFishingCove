@@ -4,7 +4,7 @@
 set -e
 cd "$(dirname "$0")"
 OUT=../thunderstore-out; mkdir -p $OUT
-for MOD in EtherPets WolfparkHUD; do
+for MOD in EtherPets WolfparkHUD EtherEmotes; do
   T=$(mktemp -d)
   cp $MOD/manifest.json $MOD/README.md $MOD/CHANGELOG.md $MOD/icon.png $T/
   mkdir -p $T/GDWeave/mods/$MOD
