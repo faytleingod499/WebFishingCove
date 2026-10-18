@@ -1,32 +1,41 @@
 extends Node
 
 # Hugs and More
-# Emotes for two players who both have the mod. For now: a hug.
+# Emotes for two players who both have the mod: a hug and a high five (more to come).
 #
-# Walk up to another player who has the mod and press the game's interact key at "Hug <name>". They get a
-# little invitation ("<name> wants a hug!") and hug back with Y or the Hug button. Then both of you turn to
-# each other, step in, put your arms around each other and sway a little, sized to fit both of you
-# (a small player hugs a big one around the middle). It ends after a few seconds, or as soon as either
-# of you walks away.
+# Walk up to another player who has the mod: a small prompt ("F  Interact") floats above them. Press F and
+# a little window opens with the emotes to pick from. They get an invitation ("<name> wants a hug!") and
+# answer with Y or the button. Then both of you play it together, sized to fit both of you:
+# - Hug: you turn to each other, step in, put your arms around each other and sway a little. It ends
+#   after a few seconds, or as soon as either of you walks away.
+# - High five: you face each other, raise your hands and slap them together above your heads.
 #
 # Everything goes through the Steam lobby member data ("hugsandmore"), so every player with the mod sees
-# the hug. Players without the mod see nothing unusual.
+# it. Players without the mod see nothing unusual.
 
-const VERSION = "1.0.0"
+const VERSION = "1.1.0"
 const SYNC_KEY = "hugsandmore"   # "1;<seq>;<ask|yes>;<emote>;<target steam id>;<the seq it answers>"
-const AREA_SCRIPT = "res://mods/HugsAndMore/emote_area.gd"
 const SKELETON_PATH = "body/player_body/Armature/Skeleton"
 const POPUP_ID = "HUGSANDMORE"
+const SLAP_SOUND = "res://Sounds/punch.ogg"
+
+# the emotes: what the window shows, what the invitation says, the answer button, how long it lasts
+const EMOTE_ORDER = ["hug", "highfive"]
+const EMOTES = {
+	"hug": {"label": "Hug", "ask": "wants a hug!", "answer": "Hug back", "time": 5.0},
+	"highfive": {"label": "High five", "ask": "wants a high five!", "answer": "High five", "time": 1.5},
+}
 
 const ASK_TIME = 15.0      # an invitation is open this long
-const HUG_TIME = 5.0       # seconds of hugging
-const BLEND_TIME = 0.35    # easing in and out of the pose
-const START_RANGE = 2.6    # the two have to be about this close when the hug starts
-const MOVE_LIMIT = 0.6     # walking further than this from where the hug started ends it
+const BLEND_TIME = 0.3     # easing in and out of a pose
+const START_RANGE = 2.6    # the two have to be about this close when it starts
+const MOVE_LIMIT = 0.6     # walking further than this from where it started ends it
+const PROMPT_RANGE = 2.0   # how close you have to be for the prompt
+const OPEN_KEY = KEY_F
 const ACCEPT_KEY = KEY_Y
 
 var steam = null
-var area_script = null
+var slap_sound = null
 
 # my own state
 var my_seq = 0
@@ -38,22 +47,30 @@ var my_since = 0.0
 var sync_dirty = false
 var announced_lobby = 0    # the lobby I've told I have the mod
 
-# everyone's state, read from the lobby: steam id -> {seq, action, emote, target, ref}
+# everyone's state, read from the lobby: steam id -> {seq, action, emote, target, ref, mod}
 var states = {}
 var read_timer = 0.0
 var clock = 0.0
 
-# hugs going on: "a-b" -> {a, b, seq, t, w, start_a, start_b, ending}
-var hugs = {}
-var areas = {}             # steam id -> the "Hug" spot on that player
+# emotes going on: "<asker>-<seq>" -> {emote, a, b, t, w, start_a, start_b, ending, pa, pb, slapped}
+var pairs = {}
 var answered = {}          # "<steam id>-<seq>" of invitations already answered or declined
 
-# the invitation box
+# the prompt over the nearest player, the window to pick an emote, the invitation box
 var layer
+var prompt_layer
+var prompt
+var prompt_target = 0
+var picker
+var picker_title
+var picker_target = 0
+var locked_hud = null
 var invite_panel
 var invite_label
+var invite_yes
 var invite_from = 0
 var invite_seq = 0
+var invite_emote = ""
 var toast
 var toast_until = 0.0
 
@@ -61,14 +78,15 @@ var toast_until = 0.0
 func _ready():
 	if Engine.has_singleton("Steam"):
 		steam = Engine.get_singleton("Steam")
-	if ResourceLoader.exists(AREA_SCRIPT):
-		area_script = load(AREA_SCRIPT)
+	if ResourceLoader.exists(SLAP_SOUND):
+		slap_sound = load(SLAP_SOUND)
 	_build_ui()
 
 
 func _exit_tree():
-	for key in hugs.keys():
-		_clear_pose(hugs[key])
+	_close_picker()
+	for key in pairs.keys():
+		_clear_pose(pairs[key])
 	_set_state("", "", 0, 0)
 	_flush_state()
 
@@ -84,10 +102,10 @@ func _process(delta):
 	var me = int(net.STEAM_ID) if net != null else 0
 
 	# my invitation or answer runs out
-	if my_action != "" and clock - my_since > ASK_TIME and not _in_hug(me):
+	if my_action != "" and clock - my_since > ASK_TIME and not _busy(me):
 		_set_state("", "", 0, 0)
 
-	# tell the lobby once that I have the mod, so others get the "Hug" prompt on me even while I'm idle
+	# tell the lobby once that I have the mod, so others get the prompt on me even while I'm idle
 	if lobby > 0 and lobby != announced_lobby and steam != null and steam.has_method("setLobbyMemberData"):
 		announced_lobby = lobby
 		steam.setLobbyMemberData(lobby, SYNC_KEY + "_v", VERSION)
@@ -101,9 +119,10 @@ func _process(delta):
 			_flush_state()
 
 	var players = _players()
-	_update_areas(players, me)
+	_update_prompt(players, me)
+	_update_picker(players, me)
 	_update_invite(me)
-	_update_hugs(players, me, delta)
+	_update_pairs(players, me, delta)
 	toast.visible = clock < toast_until
 
 
@@ -172,51 +191,116 @@ func _read_states(lobby, me):
 		states[int(id)] = state
 
 
-# --- the "Hug <name>" spot on other players ---
+# --- the small prompt over the nearest player with the mod ---
 
-func _update_areas(players, me):
-	for id in areas.keys():
-		if not players.has(id) or not is_instance_valid(areas[id]):
-			if is_instance_valid(areas[id]):
-				areas[id].queue_free()
-			areas.erase(id)
-	if area_script == null:
+func _update_prompt(players, me):
+	prompt_target = 0
+	if players.has(me) and _hud_free() and not _busy(me) and picker_target == 0:
+		var here = players[me].global_transform.origin
+		var best = PROMPT_RANGE
+		for id in players.keys():
+			if id == me or not states.has(id) or not states[id].get("mod", false) or _busy(id):
+				continue
+			var d = _flat(players[id].global_transform.origin - here).length()
+			if d < best:
+				best = d
+				prompt_target = id
+	if prompt_target == 0:
+		prompt.visible = false
 		return
-	for id in players.keys():
-		if id == me or not states.has(id) or not states[id].get("mod", false):
-			continue
-		if not areas.has(id):
-			var area = Area.new()
-			area.set_script(area_script)
-			area.mod = self
-			area.target_id = id
-			var shape = CollisionShape.new()
-			var capsule = SphereShape.new()
-			capsule.radius = 0.7
-			shape.shape = capsule
-			area.add_child(shape)
-			players[id].add_child(area)
-			areas[id] = area
-		var area = areas[id]
-		area.text = "Hug " + _name_of(id)
-		# not while either of you is already hugging, or while you're already asking them
-		area.visible = not _in_hug(me) and not _in_hug(id) and not (my_action == "ask" and my_target == id)
+	_place_over(prompt, players[prompt_target], 0.0)
 
 
-func _on_area_activated(target_id, actor):
-	if actor == null or actor.get("controlled") != true:
+# puts a small box on screen just above a player's head
+func _place_over(control, player, lift):
+	var view = player.get_viewport()
+	var camera = view.get_camera() if view != null else null
+	if camera == null or not player.is_visible_in_tree():
+		control.visible = false
 		return
+	var top = player.global_transform.origin + Vector3.UP * (1.25 + lift) * _player_size(player)
+	var sk = player.get_node_or_null(SKELETON_PATH)
+	if sk != null and sk.find_bone("head") >= 0:
+		top = sk.global_transform.xform(sk.get_bone_global_pose(sk.find_bone("head")).origin) + Vector3.UP * (0.75 + lift) * _player_size(player)
+	if camera.is_position_behind(top):
+		control.visible = false
+		return
+	var at = camera.unproject_position(top)
+	var holder = view.get_parent()
+	if holder is ViewportContainer and view.size.x > 0 and view.size.y > 0:
+		var box = holder.get_global_rect()
+		at = box.position + at * (box.size / view.size)
+	control.visible = true
+	control.rect_size = Vector2()
+	var size = control.get_combined_minimum_size()
+	control.rect_position = Vector2(at.x - size.x / 2.0, at.y - size.y)
+
+
+func _input(event):
+	if not (event is InputEventKey) or not event.pressed or event.echo:
+		return
+	var hud = _get_hud()
+	if hud != null and hud.get("using_chat") == true:
+		return
+	if event.scancode == ACCEPT_KEY and invite_from != 0 and invite_panel.visible:
+		_on_invite_yes()
+		get_tree().set_input_as_handled()
+	elif event.scancode == OPEN_KEY:
+		if picker_target != 0:
+			_close_picker()
+			get_tree().set_input_as_handled()
+		elif prompt_target != 0 and prompt.visible:
+			_open_picker(prompt_target)
+			get_tree().set_input_as_handled()
+	elif event.scancode == KEY_ESCAPE and picker_target != 0:
+		_close_picker()
+		get_tree().set_input_as_handled()
+
+
+# --- the window to pick an emote ---
+
+func _open_picker(target):
+	picker_target = target
+	picker_title.text = _name_of(target)
+	picker.visible = true
+	prompt.visible = false
+	_lock_hud()
+
+
+func _close_picker():
+	picker_target = 0
+	if picker != null:
+		picker.visible = false
+	_unlock_hud()
+
+
+func _update_picker(players, me):
+	if picker_target == 0:
+		return
+	# it closes when they walk off, a menu opens, or something is already going on
+	if not players.has(picker_target) or not players.has(me) or _busy(me) or _busy(picker_target) \
+			or _flat(players[picker_target].global_transform.origin - players[me].global_transform.origin).length() > START_RANGE + 1.0 \
+			or not _hud_free(true):
+		_close_picker()
+		return
+	_place_over(picker, players[picker_target], 0.15)
+
+
+func _on_pick(kind):
+	var target = picker_target
+	_close_picker()
+	if target == 0:
+		return
+	# they asked me for the same thing first: that's a yes
+	var theirs = states.get(int(target))
 	var net = get_node_or_null("/root/Network")
-	if net == null or _in_hug(int(net.STEAM_ID)):
+	var me = int(net.STEAM_ID) if net != null else 0
+	if theirs != null and theirs["action"] == "ask" and theirs["emote"] == kind and theirs["target"] == me:
+		_accept(int(target), theirs["seq"], kind)
 		return
-	# they asked me first: that's a yes
-	var theirs = states.get(int(target_id))
-	if theirs != null and theirs["action"] == "ask" and theirs["target"] == int(net.STEAM_ID):
-		_accept(int(target_id), theirs["seq"])
-		return
-	_set_state("ask", "hug", target_id, 0)
+	_set_state("ask", kind, target, 0)
 	_flush_state()
-	_show_toast("Asked " + _name_of(target_id) + " for a hug...")
+	_show_toast("Asked " + _name_of(target) + " for a " + EMOTES[kind]["label"].to_lower() + "...")
 
 
 # --- an invitation for me ---
@@ -224,18 +308,22 @@ func _on_area_activated(target_id, actor):
 func _update_invite(me):
 	var from = 0
 	var seq = 0
+	var kind = ""
 	for id in states.keys():
 		var s = states[id]
-		if id != me and s["action"] == "ask" and s["emote"] == "hug" and s["target"] == me \
-				and not answered.has(str(id) + "-" + str(s["seq"])) and not _in_hug(me) and not _in_hug(id):
+		if id != me and s["action"] == "ask" and EMOTES.has(s["emote"]) and s["target"] == me \
+				and not answered.has(str(id) + "-" + str(s["seq"])) and not _busy(me) and not _busy(id):
 			from = id
 			seq = s["seq"]
+			kind = s["emote"]
 			break
 	if from != invite_from or seq != invite_seq:
 		invite_from = from
 		invite_seq = seq
+		invite_emote = kind
 		if from != 0:
-			invite_label.text = _name_of(from) + " wants a hug!"
+			invite_label.text = _name_of(from) + " " + EMOTES[kind]["ask"]
+			invite_yes.text = EMOTES[kind]["answer"] + " (Y)"
 	invite_panel.visible = invite_from != 0 and _hud_free()
 	if invite_panel.visible:
 		var size = invite_panel.get_viewport_rect().size
@@ -243,20 +331,9 @@ func _update_invite(me):
 		invite_panel.rect_position = Vector2((size.x - invite_panel.rect_size.x) / 2.0, size.y * 0.18)
 
 
-func _input(event):
-	if invite_from == 0 or not invite_panel.visible:
-		return
-	if event is InputEventKey and event.pressed and not event.echo and event.scancode == ACCEPT_KEY:
-		var hud = _get_hud()
-		if hud != null and hud.get("using_chat") == true:
-			return
-		_on_invite_yes()
-		get_tree().set_input_as_handled()
-
-
 func _on_invite_yes():
 	if invite_from != 0:
-		_accept(invite_from, invite_seq)
+		_accept(invite_from, invite_seq, invite_emote)
 
 
 func _on_invite_no():
@@ -266,81 +343,85 @@ func _on_invite_no():
 		invite_panel.visible = false
 
 
-func _accept(from, seq):
+func _accept(from, seq, kind):
 	answered[str(from) + "-" + str(seq)] = true
-	_set_state("yes", "hug", from, seq)
+	_set_state("yes", kind, from, seq)
 	_flush_state()
 	invite_from = 0
 	invite_panel.visible = false
 
 
-# --- hugs ---
+# --- emotes going on ---
 
-func _in_hug(id):
-	for key in hugs.keys():
-		var h = hugs[key]
-		if not h["ending"] and (h["a"] == id or h["b"] == id):
+func _busy(id):
+	for key in pairs.keys():
+		var p = pairs[key]
+		if not p["ending"] and (p["a"] == id or p["b"] == id):
 			return true
 	return false
 
 
-func _update_hugs(players, me, delta):
-	# a hug is on while one asked and the other said yes to that very invitation (or both asked each other)
+func _update_pairs(players, me, delta):
+	# one is on while one asked and the other said yes to that very invitation (or both asked each other)
 	var wanted = {}
 	for a in states.keys():
 		var s = states[a]
-		if s["action"] != "ask" or s["emote"] != "hug" or not states.has(s["target"]):
+		if s["action"] != "ask" or not EMOTES.has(s["emote"]) or not states.has(s["target"]):
 			continue
 		var b = s["target"]
 		var t = states[b]
-		var yes = t["action"] == "yes" and t["target"] == a and t["ref"] == s["seq"]
-		var both_asked = t["action"] == "ask" and t["target"] == a
+		var yes = t["action"] == "yes" and t["target"] == a and t["ref"] == s["seq"] and t["emote"] == s["emote"]
+		var both_asked = t["action"] == "ask" and t["target"] == a and t["emote"] == s["emote"]
 		if yes or (both_asked and a < b):
-			wanted[str(a) + "-" + str(s["seq"])] = [a, b]
+			wanted[str(a) + "-" + str(s["seq"])] = [a, b, s["emote"]]
 
 	for key in wanted.keys():
-		if hugs.has(key):
+		if pairs.has(key):
 			continue
 		var a = wanted[key][0]
 		var b = wanted[key][1]
-		if not players.has(a) or not players.has(b) or _busy(a) or _busy(b):
+		if not players.has(a) or not players.has(b) or _taken(a) or _taken(b):
 			continue
 		var pa = players[a].global_transform.origin
 		var pb = players[b].global_transform.origin
-		if Vector2(pa.x - pb.x, pa.z - pb.z).length() > START_RANGE:
+		if _flat(pa - pb).length() > START_RANGE:
 			if a == me or b == me:
-				_show_toast("Too far apart for a hug")
+				_show_toast("Too far apart")
 				_set_state("", "", 0, 0)
 			continue
-		hugs[key] = {"a": a, "b": b, "t": 0.0, "w": 0.0, "start_a": pa, "start_b": pb, "ending": false,
-			"pa": players[a], "pb": players[b]}
+		pairs[key] = {"emote": wanted[key][2], "a": a, "b": b, "t": 0.0, "w": 0.0, "start_a": pa, "start_b": pb,
+			"ending": false, "pa": players[a], "pb": players[b], "slapped": false}
 
-	for key in hugs.keys():
-		var h = hugs[key]
-		h["t"] += delta
-		var gone = not is_instance_valid(h["pa"]) or not is_instance_valid(h["pb"])
-		if not gone and not h["ending"]:
-			var moved = _flat(h["pa"].global_transform.origin - h["start_a"]).length() > MOVE_LIMIT \
-				or _flat(h["pb"].global_transform.origin - h["start_b"]).length() > MOVE_LIMIT
-			if moved or h["t"] > HUG_TIME or not wanted.has(key) and h["t"] > 1.0:
-				h["ending"] = true
-				if h["a"] == me or h["b"] == me:
+	for key in pairs.keys():
+		var p = pairs[key]
+		p["t"] += delta
+		var gone = not is_instance_valid(p["pa"]) or not is_instance_valid(p["pb"])
+		if not gone and not p["ending"]:
+			var moved = _flat(p["pa"].global_transform.origin - p["start_a"]).length() > MOVE_LIMIT \
+				or _flat(p["pb"].global_transform.origin - p["start_b"]).length() > MOVE_LIMIT
+			if moved or p["t"] > EMOTES[p["emote"]]["time"] or not wanted.has(key) and p["t"] > 1.0:
+				p["ending"] = true
+				if p["a"] == me or p["b"] == me:
 					_set_state("", "", 0, 0)
 		if gone:
-			_clear_pose(h)
-			hugs.erase(key)
+			_clear_pose(p)
+			pairs.erase(key)
 			continue
-		h["w"] = clamp(h["w"] + (delta if not h["ending"] else -delta) / BLEND_TIME, 0.0, 1.0)
-		if h["ending"] and h["w"] <= 0.0:
-			_clear_pose(h)
-			hugs.erase(key)
+		p["w"] = clamp(p["w"] + (delta if not p["ending"] else -delta) / BLEND_TIME, 0.0, 1.0)
+		if p["ending"] and p["w"] <= 0.0:
+			_clear_pose(p)
+			pairs.erase(key)
 			continue
-		_pose_hug(h)
+		if p["emote"] == "hug":
+			_pose_hug(p)
+		else:
+			_pose_highfive(p)
 
 
-func _busy(id):
-	for key in hugs.keys():
-		if hugs[key]["a"] == id or hugs[key]["b"] == id:
+# anyone in a pair at all, even one easing out
+func _taken(id):
+	for key in pairs.keys():
+		if pairs[key]["a"] == id or pairs[key]["b"] == id:
 			return true
 	return false
 
@@ -349,73 +430,34 @@ func _flat(v):
 	return Vector3(v.x, 0, v.z)
 
 
-# --- the pose ---
+# --- the poses ---
+# Everything is drawn with bone overrides on both players, nobody's real position changes. Each body
+# (the pelvis) is turned to face the other and stepped to its place; arms reach with a two-bone reach.
 
-# Both players turn to face each other and step in to meet in the middle, then wrap their arms around
-# the other: the hands reach behind the other's back at a height that suits both (a small player
-# hugs a big one around the middle, a big one hugs a small one around the shoulders). The two sway
-# gently together. All of it is drawn with bone overrides, nobody's real position changes.
-func _pose_hug(h):
-	var pa = h["pa"]
-	var pb = h["pb"]
-	var sa = _player_size(pa)
-	var sb = _player_size(pb)
-	var A = _flat(pa.global_transform.origin)
-	var B = _flat(pb.global_transform.origin)
-	var dir = B - A
-	if dir.length() < 0.01:
-		dir = _facing(pa)
-	dir = dir.normalized()
-	var mid = (A + B) / 2.0
-	var gap = 0.30 * (sa + sb) / 2.0           # chest to chest
-	var sway = deg2rad(4.0) * sin(h["t"] * 2.2) * h["w"]
-	_pose_one(pa, pb, dir, mid, gap, sa, sb, sway, h["w"], 1.0)
-	_pose_one(pb, pa, -dir, mid, gap, sb, sa, sway, h["w"], -1.0)
-
-
-func _pose_one(me_node, other, dir, mid, gap, s_me, s_other, sway, w, tilt_side):
+# turns and steps one body; returns what the arms need to know
+func _place_body(me_node, dir, mid, gap, sway, w):
 	var sk = me_node.get_node_or_null(SKELETON_PATH)
-	var osk = other.get_node_or_null(SKELETON_PATH)
-	if sk == null or osk == null:
-		return
+	if sk == null:
+		return null
 	var pelvis = sk.find_bone("pelvis")
-	var head = sk.find_bone("head")
 	if pelvis < 0:
-		return
+		return null
 	var W = sk.global_transform
-	var Winv = W.affine_inverse()
 	var here = me_node.global_transform.origin
-
-	# where my body goes and which way it faces: turned to the other, stepped in to the middle, swaying
 	var fwd = _facing(me_node)
 	var turn = atan2(fwd.cross(dir).y, fwd.dot(dir))
 	var spot = mid - dir * gap / 2.0
 	var move = Transform(Basis(), Vector3(spot.x - here.x, 0, spot.z - here.z))
 	var spin = Transform(Basis(), here) * Transform(Basis(Vector3.UP, turn), Vector3()) * Transform(Basis(), -here)
 	var swaying = Transform(Basis(), mid) * Transform(Basis(Vector3.UP, sway), Vector3()) * Transform(Basis(), -mid)
-	var world_move = swaying * move * spin
-	var rebase = Winv * world_move * W         # moves any of my bones (skeleton space) to where they go now
+	var rebase = W.affine_inverse() * swaying * move * spin * W   # my bones (skeleton space) to where they go now
+	sk.set_bone_global_pose_override(pelvis, rebase * sk.get_bone_global_pose_no_override(pelvis), w, true)
+	return {"sk": sk, "W": W, "Winv": W.affine_inverse(), "rebase": rebase, "spot": spot}
 
-	var g_pelvis = sk.get_bone_global_pose_no_override(pelvis)
-	sk.set_bone_global_pose_override(pelvis, rebase * g_pelvis, w, true)
 
-	# the other's body, where it stands in the hug: their middle, and the height my arms go round
-	var their_spot = mid + dir * gap / 2.0
-	var my_shoulder_y = 0.0
-	var their_shoulder_y = 0.0
-	var arm_l = sk.find_bone("arm.l")
-	var arm_r = sk.find_bone("arm.r")
-	if arm_l >= 0:
-		my_shoulder_y = W.xform(sk.get_bone_global_pose_no_override(arm_l).origin).y
-	var o_arm = osk.find_bone("arm.l")
-	if o_arm >= 0:
-		their_shoulder_y = osk.global_transform.xform(osk.get_bone_global_pose_no_override(o_arm).origin).y
-	var their_feet = other.global_transform.origin.y - 1.0 * s_other
-	var height = min(my_shoulder_y - 0.12 * s_me, their_shoulder_y - 0.06 * s_other)
-	height = max(height, their_feet + 0.35 * s_other)
-	var radius = 0.24 * s_other                # roughly how round the other's body is
-
-	var left = Vector3.UP.cross(dir).normalized()
+# reaches one arm (the one on that side of the body) so its fingertips end at a point
+func _reach(body, side_sign, target_w, pole_w, left, w):
+	var sk = body["sk"]
 	for side in [["arm.l", "elbow.l", "hand.l"], ["arm.r", "elbow.r", "hand.r"]]:
 		var arm = sk.find_bone(side[0])
 		var elbow = sk.find_bone(side[1])
@@ -424,26 +466,129 @@ func _pose_one(me_node, other, dir, mid, gap, s_me, s_other, sway, w, tilt_side)
 			continue
 		var g_arm = sk.get_bone_global_pose_no_override(arm)
 		var g_elbow = sk.get_bone_global_pose_no_override(elbow)
-		var g_hand = sk.get_bone_global_pose_no_override(hand)
-		var a = rebase * g_arm
-		var shoulder_w = W.xform(a.origin)
-		var s = sign(_flat(shoulder_w - spot).dot(left))
+		var a = body["rebase"] * g_arm
+		var s = sign(_flat(body["W"].xform(a.origin) - body["spot"]).dot(left))
 		if s == 0:
 			s = 1.0
-		# behind their back, a little to my side of their middle
-		var target_w = Vector3(their_spot.x, height, their_spot.z) + dir * radius * 0.4 + left * s * radius * 0.6
-		var pole_w = left * s * 1.0 + Vector3.DOWN * 0.6 - dir * 0.2
-		_two_bone(sk, arm, elbow, hand, a, rebase * g_elbow, rebase * g_hand, Winv.xform(target_w),
-			Winv.basis.xform(pole_w).normalized(), g_arm, g_elbow, w)
-
-	# heads tip to opposite sides, so they rest past each other
-	if head >= 0:
-		var g_head = rebase * sk.get_bone_global_pose_no_override(head)
-		var axis = Winv.basis.xform(dir).normalized()
-		sk.set_bone_global_pose_override(head, Transform(Basis(axis, deg2rad(12.0) * tilt_side) * g_head.basis, g_head.origin), w, true)
+		if side_sign != 0 and s != side_sign:
+			continue
+		var t = target_w
+		var pole = pole_w
+		if typeof(target_w) == TYPE_ARRAY:   # [centre, sideways]: each arm goes to its own side
+			t = target_w[0] + target_w[1] * s
+			pole = pole_w[0] + pole_w[1] * s
+		_two_bone(sk, arm, elbow, hand, a, body["rebase"] * g_elbow, body["rebase"] * sk.get_bone_global_pose_no_override(hand),
+			body["Winv"].xform(t), body["Winv"].basis.xform(pole).normalized(), g_arm, g_elbow, w)
 
 
-# a two-bone reach: the elbow bends out to the side and down, the fingertips end at the target
+func _shoulder_y(player):
+	var sk = player.get_node_or_null(SKELETON_PATH)
+	if sk == null or sk.find_bone("arm.l") < 0:
+		return player.global_transform.origin.y + 0.5 * _player_size(player)
+	return sk.global_transform.xform(sk.get_bone_global_pose_no_override(sk.find_bone("arm.l")).origin).y
+
+
+func _tilt_head(body, axis_w, deg, w):
+	var sk = body["sk"]
+	var head = sk.find_bone("head")
+	if head < 0:
+		return
+	var g = body["rebase"] * sk.get_bone_global_pose_no_override(head)
+	var axis = body["Winv"].basis.xform(axis_w).normalized()
+	sk.set_bone_global_pose_override(head, Transform(Basis(axis, deg2rad(deg)) * g.basis, g.origin), w, true)
+
+
+func _pair_frame(p):
+	var A = _flat(p["pa"].global_transform.origin)
+	var B = _flat(p["pb"].global_transform.origin)
+	var dir = B - A
+	if dir.length() < 0.01:
+		dir = _facing(p["pa"])
+	return [dir.normalized(), (A + B) / 2.0]
+
+
+# A hug: both step in to meet in the middle and wrap their arms around the other, the hands behind the
+# other's back at a height that suits both (a small player hugs a big one around the middle, a big one
+# hugs a small one around the shoulders). They sway gently together and tip their heads past each other.
+func _pose_hug(p):
+	var frame = _pair_frame(p)
+	var dir = frame[0]
+	var mid = frame[1]
+	var sa = _player_size(p["pa"])
+	var sb = _player_size(p["pb"])
+	var gap = 0.30 * (sa + sb) / 2.0           # chest to chest
+	var sway = deg2rad(4.0) * sin(p["t"] * 2.2) * p["w"]
+	_hug_one(p["pa"], p["pb"], dir, mid, gap, sa, sb, sway, p["w"], 1.0)
+	_hug_one(p["pb"], p["pa"], -dir, mid, gap, sb, sa, sway, p["w"], -1.0)
+
+
+func _hug_one(me_node, other, dir, mid, gap, s_me, s_other, sway, w, tilt_side):
+	var body = _place_body(me_node, dir, mid, gap, sway, w)
+	if body == null:
+		return
+	var their_spot = mid + dir * gap / 2.0
+	var their_feet = other.global_transform.origin.y - 1.0 * s_other
+	var height = min(_shoulder_y(me_node) - 0.12 * s_me, _shoulder_y(other) - 0.06 * s_other)
+	height = max(height, their_feet + 0.35 * s_other)
+	var radius = 0.24 * s_other                # roughly how round the other's body is
+	var left = Vector3.UP.cross(dir).normalized()
+	var centre = Vector3(their_spot.x, height, their_spot.z) + dir * radius * 0.4
+	_reach(body, 0, [centre, left * radius * 0.6], [Vector3.DOWN * 0.6 - dir * 0.2, left], left, w)
+	_tilt_head(body, dir, 12.0 * tilt_side, w)
+
+
+# A high five: both face each other an arm's length apart, raise their right hands and slap them
+# together between them, a little above the shorter one's head, then let them drop again.
+func _pose_highfive(p):
+	var frame = _pair_frame(p)
+	var dir = frame[0]
+	var mid = frame[1]
+	var sa = _player_size(p["pa"])
+	var sb = _player_size(p["pb"])
+	var gap = 0.46 * (sa + sb) / 2.0
+	var height = (_shoulder_y(p["pa"]) + _shoulder_y(p["pb"])) / 2.0 + 0.16 * min(sa, sb)
+	# no higher than the shorter one can reach, the taller one reaches down to meet them
+	var short = p["pa"] if sa <= sb else p["pb"]
+	height = min(height, _shoulder_y(short) + 0.3 * min(sa, sb))
+	var contact = Vector3(mid.x, height, mid.z)
+	var t = p["t"]
+	# raise (0-0.35 s), swing in and slap (0.35-0.5 s), a little bounce back, hold, drop
+	var swing = smoothstep(0.3, 0.5, t)
+	var bounce = 0.04 * smoothstep(0.5, 0.65, t)
+	if t >= 0.5 and not p["slapped"]:
+		p["slapped"] = true
+		_play_slap(p["pa"], contact)
+	_five_one(p["pa"], dir, mid, gap, sa, contact, swing, bounce, p["w"])
+	_five_one(p["pb"], -dir, mid, gap, sb, contact, swing, bounce, p["w"])
+
+
+func _five_one(me_node, dir, mid, gap, s_me, contact, swing, bounce, w):
+	var body = _place_body(me_node, dir, mid, gap, 0.0, w)
+	if body == null:
+		return
+	var left = Vector3.UP.cross(dir).normalized()
+	var right = -left
+	# from up by my own shoulder, swung across to the meeting point
+	var spot = body["spot"]
+	var raised = Vector3(spot.x, _shoulder_y(me_node) + 0.3 * s_me, spot.z) + right * 0.18 * s_me + dir * 0.08 * s_me
+	var target = raised.linear_interpolate(contact - dir * 0.03 * s_me, swing) - dir * bounce * s_me
+	_reach(body, -1, target, right * 1.0 + Vector3.DOWN * 0.8, left, w)
+
+
+func _play_slap(node, at):
+	if slap_sound == null or not is_instance_valid(node):
+		return
+	var player = AudioStreamPlayer3D.new()
+	player.stream = slap_sound
+	player.pitch_scale = 1.5
+	player.unit_db = -2.0
+	player.max_distance = 30.0
+	node.add_child(player)
+	player.global_transform.origin = at
+	player.connect("finished", player, "queue_free")
+	player.play()
+
+
 func _two_bone(sk, arm, elbow, hand, a, e, hnd, target, pole, g_arm, g_elbow, w):
 	var finger = 0.08
 	var S = a.origin
@@ -531,52 +676,139 @@ func _get_hud():
 	return hud
 
 
-func _hud_free():
+# nothing of the game's is open (my own picker window can be, when asked)
+func _hud_free(allow_mine = false):
 	var hud = _get_hud()
 	if hud == null:
 		return false
-	return hud.get("menu") == 0 and hud.get("hud_hidden") != true
+	if hud.get("menu") != 0 or hud.get("hud_hidden") == true or hud.get("using_chat") == true:
+		return false
+	var popups = hud.get("popups")
+	if typeof(popups) == TYPE_ARRAY:
+		for entry in popups:
+			if not (allow_mine and entry == POPUP_ID):
+				return false
+	return true
+
+
+# while the picker is open the game ignores its keys
+func _lock_hud():
+	var hud = _get_hud()
+	if hud == null:
+		return
+	var popups = hud.get("popups")
+	if typeof(popups) == TYPE_ARRAY and not popups.has(POPUP_ID):
+		popups.append(POPUP_ID)
+	locked_hud = hud
+
+
+func _unlock_hud():
+	if locked_hud != null and is_instance_valid(locked_hud):
+		var popups = locked_hud.get("popups")
+		if typeof(popups) == TYPE_ARRAY:
+			popups.erase(POPUP_ID)
+	locked_hud = null
 
 
 # --- the invitation box ---
 
 func _build_ui():
+	# the prompt sits under the game's own windows, the picker and invitation on top
+	prompt_layer = CanvasLayer.new()
+	prompt_layer.layer = 1
+	add_child(prompt_layer)
 	layer = CanvasLayer.new()
 	layer.layer = 3
 	add_child(layer)
 
-	invite_panel = PanelContainer.new()
-	invite_panel.visible = false
-	invite_panel.add_stylebox_override("panel", _glass(Color(0.06, 0.12, 0.18, 0.75), Color(1.0, 0.7, 0.85, 0.7), 12, 6))
-	layer.add_child(invite_panel)
+	# "F  Interact": small, in the same see-through glass as the Wolfpark HUD
+	prompt = PanelContainer.new()
+	prompt.visible = false
+	prompt.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	prompt.add_stylebox_override("panel", _glass(Color(0.06, 0.12, 0.18, 0.55), Color(0.55, 1.0, 1.0, 0.45), 8, 3))
+	prompt_layer.add_child(prompt)
+	var prow = HBoxContainer.new()
+	prow.add_constant_override("separation", 6)
+	prow.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	prompt.add_child(prow)
+	var key = Label.new()
+	key.text = "F"
+	key.add_color_override("font_color", Color(0.55, 1.0, 1.0))
+	key.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	prow.add_child(key)
+	var word = Label.new()
+	word.text = "Interact"
+	word.add_color_override("font_color", Color(1, 1, 1, 0.9))
+	word.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	prow.add_child(word)
+	prompt.rect_scale = Vector2(0.85, 0.85)
+
+	# the picker: who it's for, one button per emote
+	picker = PanelContainer.new()
+	picker.visible = false
+	picker.mouse_filter = Control.MOUSE_FILTER_STOP
+	picker.add_stylebox_override("panel", _glass(Color(0.06, 0.12, 0.18, 0.7), Color(0.55, 1.0, 1.0, 0.45), 10, 6))
+	layer.add_child(picker)
 	var margin = MarginContainer.new()
 	for side in ["left", "right"]:
-		margin.add_constant_override("margin_" + side, 14)
-	for side in ["top", "bottom"]:
 		margin.add_constant_override("margin_" + side, 8)
-	invite_panel.add_child(margin)
+	for side in ["top", "bottom"]:
+		margin.add_constant_override("margin_" + side, 6)
+	margin.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	picker.add_child(margin)
+	var column = VBoxContainer.new()
+	column.add_constant_override("separation", 4)
+	column.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	margin.add_child(column)
+	var head = HBoxContainer.new()
+	head.add_constant_override("separation", 8)
+	column.add_child(head)
+	picker_title = Label.new()
+	picker_title.add_color_override("font_color", Color(0.55, 1.0, 1.0))
+	picker_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	head.add_child(picker_title)
+	var close = Button.new()
+	close.text = "x"
+	close.focus_mode = Control.FOCUS_NONE
+	close.connect("pressed", self, "_close_picker")
+	_glass_button(close)
+	head.add_child(close)
+	for kind in EMOTE_ORDER:
+		var b = Button.new()
+		b.text = EMOTES[kind]["label"]
+		b.focus_mode = Control.FOCUS_NONE
+		b.connect("pressed", self, "_on_pick", [kind])
+		_glass_button(b)
+		column.add_child(b)
+
+	# the invitation
+	invite_panel = PanelContainer.new()
+	invite_panel.visible = false
+	invite_panel.add_stylebox_override("panel", _glass(Color(0.06, 0.12, 0.18, 0.7), Color(0.55, 1.0, 1.0, 0.45), 10, 6))
+	layer.add_child(invite_panel)
+	var imargin = MarginContainer.new()
+	for side in ["left", "right"]:
+		imargin.add_constant_override("margin_" + side, 10)
+	for side in ["top", "bottom"]:
+		imargin.add_constant_override("margin_" + side, 6)
+	invite_panel.add_child(imargin)
 	var row = HBoxContainer.new()
-	row.add_constant_override("separation", 10)
-	margin.add_child(row)
+	row.add_constant_override("separation", 8)
+	imargin.add_child(row)
 	invite_label = Label.new()
 	invite_label.add_color_override("font_color", Color(1, 1, 1))
 	invite_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	row.add_child(invite_label)
-	var yes = Button.new()
-	yes.text = "Hug (Y)"
-	yes.focus_mode = Control.FOCUS_NONE
-	yes.connect("pressed", self, "_on_invite_yes")
-	yes.add_stylebox_override("normal", _glass(Color(0.85, 0.35, 0.55, 0.55), Color(1.0, 0.75, 0.85, 0.8), 8, 0))
-	yes.add_stylebox_override("hover", _glass(Color(0.95, 0.45, 0.65, 0.7), Color(1.0, 0.85, 0.9, 1.0), 8, 0))
-	yes.add_stylebox_override("pressed", _glass(Color(0.7, 0.25, 0.45, 0.7), Color(1.0, 0.85, 0.9, 1.0), 8, 0))
-	row.add_child(yes)
+	invite_yes = Button.new()
+	invite_yes.focus_mode = Control.FOCUS_NONE
+	invite_yes.connect("pressed", self, "_on_invite_yes")
+	_glass_button(invite_yes)
+	row.add_child(invite_yes)
 	var no = Button.new()
 	no.text = "No thanks"
 	no.focus_mode = Control.FOCUS_NONE
 	no.connect("pressed", self, "_on_invite_no")
-	no.add_stylebox_override("normal", _glass(Color(0, 0, 0, 0.3), Color(0.55, 1.0, 1.0, 0.35), 8, 0))
-	no.add_stylebox_override("hover", _glass(Color(0, 0, 0, 0.4), Color(0.8, 1.0, 1.0, 0.8), 8, 0))
-	no.add_stylebox_override("pressed", _glass(Color(0, 0, 0, 0.5), Color(0.8, 1.0, 1.0, 0.8), 8, 0))
+	_glass_button(no)
 	row.add_child(no)
 
 	toast = Label.new()
@@ -599,16 +831,30 @@ func _show_toast(text):
 	toast_until = clock + 3.0
 
 
+# the Wolfpark HUD's look: a see-through, softly outlined box, and its glassy buttons
 func _glass(fill, edge, radius, shadow):
 	var box = StyleBoxFlat.new()
 	box.bg_color = fill
 	box.border_color = edge
 	box.set_border_width_all(1)
 	box.set_corner_radius_all(radius)
+	box.shadow_color = Color(0, 0, 0, 0.3)
+	box.shadow_size = shadow
 	box.content_margin_left = 8
 	box.content_margin_right = 8
 	box.content_margin_top = 3
 	box.content_margin_bottom = 3
-	box.shadow_color = Color(0, 0, 0, 0.25)
-	box.shadow_size = shadow
 	return box
+
+
+func _glass_button(button):
+	var edge = Color(0.55, 1.0, 1.0, 0.5)
+	button.add_stylebox_override("normal", _glass(Color(0.2, 0.9, 0.95, 0.16), edge, 8, 0))
+	button.add_stylebox_override("hover", _glass(Color(0.3, 1.0, 1.0, 0.30), Color(0.8, 1.0, 1.0, 0.8), 8, 0))
+	button.add_stylebox_override("pressed", _glass(Color(0.3, 1.0, 1.0, 0.45), Color(0.8, 1.0, 1.0, 0.9), 8, 0))
+	button.add_stylebox_override("disabled", _glass(Color(0.5, 0.5, 0.5, 0.12), Color(0.7, 0.7, 0.7, 0.25), 8, 0))
+	button.add_stylebox_override("focus", StyleBoxEmpty.new())
+	button.add_color_override("font_color", Color(1, 1, 1))
+	button.add_color_override("font_color_hover", Color(1, 1, 1))
+	button.add_color_override("font_color_pressed", Color(1, 1, 1))
+	button.add_color_override("font_color_disabled", Color(1, 1, 1, 0.4))
