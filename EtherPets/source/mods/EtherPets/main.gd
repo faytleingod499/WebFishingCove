@@ -6,7 +6,7 @@ extends Node
 # its colours. Your choices are shared through the Steam lobby, so other players who have this mod
 # see your pet exactly as you made it. Players without the mod do not see pets. Works on any server.
 
-const VERSION = "2.6.7"
+const VERSION = "2.7.0"
 const CONFIG_PATH = "user://etherpets.json"
 const OLD_CONFIG_PATH = "user://wolfpets.json" # from when it was Wolf Pets
 const SHADOW_PATH = "res://Scenes/Entities/Shadow/shadow.tscn"
@@ -76,7 +76,7 @@ const SPECIES = {
 		"label": "Raccoon", "model": "res://mods/EtherPets/raccoon.scn", "scale": 0.6, "move": "roll", "sit": "head",
 		"roll_dist": 2.8,                                                 # one somersault, curled up and back onto its feet
 		"anims": {"wolf_sit": "raccoon_sit", "wolf_lie": "raccoon_flop"}, # its own loaf and sprawl
-		"pet_sound": "res://Sounds/cat_purr.ogg", "pet_pitch": 1.35,      # a happy trill
+		"pet_sound": "res://mods/EtherPets/trill.wav", "pet_pitch": 1.0,  # a happy churring trill
 		"call_sound": "res://mods/EtherPets/chitter.wav", "call_pitch": 1.0, # a chitter
 		"call_time": 0.85, "call_lift": 15.0,
 		"presets": [
