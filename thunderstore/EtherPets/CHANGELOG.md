@@ -1,6 +1,7 @@
-## 2.8.4
-- The wolf and cat now sit with their rump on the ground (it hovered above it, very visible on big pets).
-  The back legs fold into haunches so the paws stay planted.
+## 2.8.5
+- The wolf and cat now sit like a real dog or cat: rump on the ground, back legs folded at the knee and
+  hock with the feet flat and pointing forward (they have a knee joint now), and a gentle breathing loop
+  that no longer jumps when it repeats.
 
 ## 2.8.3
 - Fixed: after joining a server, other players sometimes didn't see your pet until you turned it off and on
