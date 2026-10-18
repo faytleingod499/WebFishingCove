@@ -6,7 +6,7 @@ extends Node
 # its colours. Your choices are shared through the Steam lobby, so other players who have this mod
 # see your pet exactly as you made it. Players without the mod do not see pets. Works on any server.
 
-const VERSION = "2.6.6"
+const VERSION = "2.6.7"
 const CONFIG_PATH = "user://etherpets.json"
 const OLD_CONFIG_PATH = "user://wolfpets.json" # from when it was Wolf Pets
 const SHADOW_PATH = "res://Scenes/Entities/Shadow/shadow.tscn"
@@ -741,7 +741,7 @@ const LAP_FORWARD = 0.22   # how far in front of the thighs' middle it lies, tim
 const LAP_DROP = 0.05      # how far below the thighs' middle its belly sits, so it rests on the lap
 const CURL_CENTRE = Vector3(-0.253, 0, -0.128) # middle of the curled-up cat, from its origin, at size 1
 const HEAD_TOP = 0.94      # from a player's head bone up to the top of their head, times their size
-const HEAD_BACK = 0.25 # how far behind the head bone the middle of the head is (times the player's size)
+const HEAD_BACK = 0.18 # how far behind the head bone the middle of the head is (times the player's size)
 const PERCH = {
 	"lap": {"anim": "cat_curl", "turn": -PI / 2.0, "hop": 0.15},
 	"head": {"anim": "raccoon_flop", "turn": 0.0, "hop": 0.6},
