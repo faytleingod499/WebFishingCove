@@ -31,8 +31,8 @@ you and you lean in and stroke its head, sized to fit you (it lowers or raises i
 for a very small player). A wolf gives a happy whine, a cat purrs, a raccoon trills.
 
 When you sit down, a wolf lies down beside you, a cat hops into your lap and curls up, and a
-raccoon climbs up and flops on your head. A raccoon doesn't walk: it curls into a ball and rolls
-after you.
+raccoon climbs up and flops on your head. A raccoon (a round, chubby one) doesn't walk: it tucks its tail in and tumbles
+head over heels after you.
 
 ## Building
 

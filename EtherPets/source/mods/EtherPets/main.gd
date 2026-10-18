@@ -6,7 +6,7 @@ extends Node
 # its colours. Your choices are shared through the Steam lobby, so other players who have this mod
 # see your pet exactly as you made it. Players without the mod do not see pets. Works on any server.
 
-const VERSION = "2.3.0"
+const VERSION = "2.4.0"
 const CONFIG_PATH = "user://etherpets.json"
 const OLD_CONFIG_PATH = "user://wolfpets.json" # from when it was Wolf Pets
 const SHADOW_PATH = "res://Scenes/Entities/Shadow/shadow.tscn"
@@ -73,14 +73,14 @@ const SPECIES = {
 		],
 	},
 	"raccoon": {
-		"label": "Raccoon", "model": "res://mods/EtherPets/raccoon.scn", "scale": 0.6, "move": "roll", "sit": "head",
-		"ball": [0.48, 0.24, 0.47],                                       # height, forward offset, radius
+		"label": "Raccoon", "model": "res://mods/EtherPets/raccoon.scn", "scale": 0.65, "move": "roll", "sit": "head",
+		"ball": [0.5, 0.0, 0.5],                                          # height, forward offset, radius
 		"anims": {"wolf_sit": "raccoon_sit", "wolf_lie": "raccoon_flop"}, # its own loaf and sprawl
 		"pet_sound": "res://Sounds/cat_purr.ogg", "pet_pitch": 1.35,      # a happy trill
 		"call_sound": "res://mods/EtherPets/chitter.wav", "call_pitch": 1.0, # a chitter
 		"call_time": 0.85, "call_lift": 15.0,
 		"presets": [
-			["Classic", {"fur": "8a8a90", "back": "2b2b30", "belly": "dcdcdf", "eyes": "1a1410", "nose": "1c1c20", "ears": "e8e2e2"}],
+			["Classic", {"fur": "666666", "back": "333333", "belly": "d9d9d9", "eyes": "0d0c06", "nose": "0d0c06", "ears": "d9d9d9"}],
 			["Silver", {"fur": "b4b6bc", "back": "4a4a52", "belly": "eeeff1", "eyes": "1a1410", "nose": "1c1c20", "ears": "f2eeee"}],
 			["Brown", {"fur": "8c7458", "back": "3a2c22", "belly": "e2d6c4", "eyes": "1a1410", "nose": "2a1e18", "ears": "f0e2d0"}],
 		],
