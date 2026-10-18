@@ -6,7 +6,7 @@ extends Node
 # its colours. Your choices are shared through the Steam lobby, so other players who have this mod
 # see your pet exactly as you made it. Players without the mod do not see pets. Works on any server.
 
-const VERSION = "2.1.2"
+const VERSION = "2.2.0"
 const CONFIG_PATH = "user://etherpets.json"
 const OLD_CONFIG_PATH = "user://wolfpets.json" # from when it was Wolf Pets
 const SHADOW_PATH = "res://Scenes/Entities/Shadow/shadow.tscn"
@@ -45,10 +45,13 @@ const PARTS = [
 
 # every kind of pet: its model, how big it is, its noises, and its ready-made looks.
 # All of them share one skeleton and one set of animations, so the rest of the mod works for each.
-const SPECIES_ORDER = ["wolf", "cat"]
+# "move": how it gets about ("walk", or "roll" curled up in a ball: "ball" is the middle of the ball
+#         and its radius, in the model's own units). "sit": what it does when its owner sits down
+#         ("beside" them, in their "lap", or on their "head").
+const SPECIES_ORDER = ["wolf", "cat", "raccoon"]
 const SPECIES = {
 	"wolf": {
-		"label": "Wolf", "model": "res://mods/EtherPets/wolf.scn", "scale": 0.82,
+		"label": "Wolf", "model": "res://mods/EtherPets/wolf.scn", "scale": 0.82, "move": "walk", "sit": "beside",
 		"pet_sound": "res://Sounds/dog_whine.ogg", "pet_pitch": 1.2,       # a happy whine
 		"call_sound": "res://mods/EtherPets/howl.wav", "call_pitch": 1.0, # a short howl
 		"call_time": 2.0, "call_lift": 40.0,                               # nose to the sky
@@ -59,7 +62,7 @@ const SPECIES = {
 		],
 	},
 	"cat": {
-		"label": "Cat", "model": "res://mods/EtherPets/cat.scn", "scale": 0.55,
+		"label": "Cat", "model": "res://mods/EtherPets/cat.scn", "scale": 0.55, "move": "walk", "sit": "lap",
 		"pet_sound": "res://Sounds/cat_purr.ogg", "pet_pitch": 1.0,       # a purr
 		"call_sound": "res://Sounds/cat_meow.ogg", "call_pitch": 1.1,     # a meow back
 		"call_time": 0.9, "call_lift": 18.0,
@@ -67,6 +70,18 @@ const SPECIES = {
 			["Ginger", {"fur": "e8a25a", "back": "c47a35", "belly": "fbe9d6", "eyes": "6fae4a", "nose": "e79aa8", "ears": "f0b8c0"}],
 			["Grey", {"fur": "a9adb5", "back": "7c808b", "belly": "eef0f2", "eyes": "d9b84a", "nose": "e79aa8", "ears": "f0b8c0"}],
 			["Black", {"fur": "3a3a40", "back": "25252a", "belly": "5c5c64", "eyes": "e8c23a", "nose": "2a2a30", "ears": "d9a0a8"}],
+		],
+	},
+	"raccoon": {
+		"label": "Raccoon", "model": "res://mods/EtherPets/raccoon.scn", "scale": 0.5, "move": "roll", "sit": "head",
+		"ball": [0.51, 0.36, 0.53],                                       # height, forward offset, radius
+		"pet_sound": "res://Sounds/cat_purr.ogg", "pet_pitch": 1.35,      # a happy trill
+		"call_sound": "res://mods/EtherPets/chitter.wav", "call_pitch": 1.0, # a chitter
+		"call_time": 0.85, "call_lift": 15.0,
+		"presets": [
+			["Classic", {"fur": "8a8a90", "back": "2b2b30", "belly": "dcdcdf", "eyes": "1a1410", "nose": "1c1c20", "ears": "e8e2e2"}],
+			["Silver", {"fur": "b4b6bc", "back": "4a4a52", "belly": "eeeff1", "eyes": "1a1410", "nose": "1c1c20", "ears": "f2eeee"}],
+			["Brown", {"fur": "8c7458", "back": "3a2c22", "belly": "e2d6c4", "eyes": "1a1410", "nose": "2a1e18", "ears": "f0e2d0"}],
 		],
 	},
 }
@@ -310,6 +325,8 @@ func _update_pets(delta, net):
 			_apply_size(pet, wanted[key][3])
 		if pet["pat"] == null:
 			_move_pet(pet, owner_node, delta)
+		if pet["anim_name"] != "raccoon_ball":
+			pet["spin"].rotation.x = lerp_angle(wrapf(pet["spin"].rotation.x, -PI, PI), 0.0, clamp(delta * 10.0, 0.0, 1.0))
 		_place_label(pet, wanted[key][4])
 		pet["howl_on"] = wanted[key][5]
 		pet["cooldown"] = wanted[key][7]
@@ -318,7 +335,7 @@ func _update_pets(delta, net):
 		if pet["area"] != null and is_instance_valid(pet["area"]):
 			var name = str(wanted[key][4])
 			pet["area"].text = "Pet " + (name if name != "" else SPECIES[pet["species"]]["label"].to_lower())
-			pet["area"].visible = pet["pat"] == null and pet["lap"] == "" and not pet["anim_name"] in ["wolf_sit", "wolf_lie", "cat_curl"]
+			pet["area"].visible = pet["pat"] == null and pet["lap"] == "" and not pet["anim_name"] in ["wolf_sit", "wolf_lie", "cat_curl", "raccoon_flop"]
 
 
 # --- making a pet ---
@@ -331,10 +348,14 @@ func _make_pet(owner_node, kind):
 	node.name = "EtherPet"
 	parent.add_child(node)
 
+	# a pivot in the middle of the pet, for the kinds that roll along
+	var spin = Spatial.new()
+	spin.name = "Spin"
+	node.add_child(spin)
 	var model = scenes[kind].instance()
 	model.rotation_degrees = Vector3(0, 180, 0) # the model looks along +Z, Godot's forward is -Z
 	model.scale = Vector3.ONE * PET_SCALE
-	node.add_child(model)
+	spin.add_child(model)
 
 	if shadow_scene != null:
 		var shadow = shadow_scene.instance()
@@ -368,7 +389,7 @@ func _make_pet(owner_node, kind):
 				continue
 			var own = base.duplicate()
 			mi.set_surface_material(i, own)
-			mats[base.resource_name] = own
+			mats[base.resource_name.split(".")[0]] = own
 
 	# start next to its owner
 	var start = owner_node.global_transform.origin + Vector3(1.0, 0, 1.0).normalized() * FOLLOW_NEAR
@@ -377,7 +398,7 @@ func _make_pet(owner_node, kind):
 	var pet = {"node": node, "model": model, "anim": anim, "mats": mats, "owner": owner_node,
 		"speed": 0.0, "still": 0.0, "anim_name": "", "sig": "", "moving": false, "sat": 0.0,
 		"area": area, "pat": null, "skeleton": model.find_node("Skeleton", true, false),
-		"scale": PET_SCALE, "size": 1.0, "side": 0, "label": _make_label(), "species": kind, "lap": "", "hop_t": 0.0, "hop_from": Vector3(),
+		"scale": PET_SCALE, "size": 1.0, "side": 0, "label": _make_label(), "species": kind, "spin": spin, "lap": "", "hop_t": 0.0, "hop_from": Vector3(),
 		"voice": _make_voice(node), "barking": false, "howl_wait": -1.0, "howl_t": -1.0,
 		"howl_on": true, "last_answer": -10000000}
 	_play(pet, "wolf_idle", 1.0)
@@ -529,6 +550,13 @@ func _apply_size(pet, size):
 	pet["size"] = size
 	pet["scale"] = SPECIES[pet["species"]]["scale"] * size
 	pet["model"].scale = Vector3.ONE * pet["scale"]
+	# a rolling pet turns about the middle of its ball
+	var info = SPECIES[pet["species"]]
+	var pivot = Vector3()
+	if info["move"] == "roll":
+		pivot = Vector3(0, info["ball"][0], info["ball"][1]) * pet["scale"]
+	pet["spin"].translation = pivot
+	pet["model"].translation = -pivot
 	var area = pet["area"]
 	if area != null and is_instance_valid(area) and area.has_meta("shape"):
 		var shape = area.get_meta("shape")
@@ -605,10 +633,11 @@ func _move_pet(pet, owner_node, delta):
 	# walk when it fell behind, stop again once it is close; it hurries when far away
 	# when its owner sits down it comes to lie beside them
 	if _is_sitting(owner_node):
-		if pet["species"] == "cat":
-			_curl_in_lap(pet, owner_node, delta)
-		else:
+		var sit = SPECIES[pet["species"]]["sit"]
+		if sit == "beside":
 			_lie_beside(pet, owner_node, delta)
+		else:
+			_perch(pet, owner_node, delta, sit)
 		return
 	pet["side"] = 0
 	# its owner stood up while it was in their lap: it hops down first
@@ -636,7 +665,7 @@ func _move_pet(pet, owner_node, delta):
 
 	# turn to where it walks, or to its owner while standing; once it sits or lies down it stays
 	# put until it gets up to follow, so its owner can sit right beside it
-	var settled = pet["anim_name"] in ["wolf_sit", "wolf_lie", "cat_curl"]
+	var settled = pet["anim_name"] in ["wolf_sit", "wolf_lie", "cat_curl", "raccoon_flop"]
 	if dist > 0.05 and (pet["speed"] > 0.3 or not settled):
 		var yaw = atan2(-dir.x, -dir.z)
 		node.rotation.y = lerp_angle(node.rotation.y, yaw, clamp(delta * (8.0 if pet["speed"] > 0.3 else 3.0), 0.0, 1.0))
@@ -645,7 +674,7 @@ func _move_pet(pet, owner_node, delta):
 	if pet["speed"] > 0.35:
 		pet["still"] = 0.0
 		# the legs speed up with it, quicker still when it runs
-		_play(pet, "wolf_walk", _stride_rate(pet["speed"]))
+		_locomote(pet, delta)
 	else:
 		pet["still"] += delta
 		# lies down next to its owner while they sit, otherwise sits after a while
@@ -679,13 +708,24 @@ func _lie_beside(pet, owner_node, delta):
 		node.rotation.y = lerp_angle(node.rotation.y, atan2(-to.x, -to.z), clamp(delta * 10.0, 0.0, 1.0))
 		pet["sat"] = 0.0
 		pet["still"] = 0.0
-		_play(pet, "wolf_walk", _stride_rate(pet["speed"]))
+		_locomote(pet, delta)
 		return
 	pet["speed"] = 0.0
 	node.global_transform.origin = _ground(node, spot, _feet_y(owner_node), pos.y, delta)
 	node.rotation.y = lerp_angle(node.rotation.y, atan2(-f.x, -f.z), clamp(delta * 5.0, 0.0, 1.0))
 	pet["sat"] += delta
 	_play(pet, "wolf_lie" if pet["sat"] > LIE_AFTER else "wolf_idle", 1.0)
+
+
+# moving along: walking legs, or for a roller, curled up in a ball turning over as it goes
+func _locomote(pet, delta, speed = null):
+	var v = pet["speed"] if speed == null else speed
+	if SPECIES[pet["species"]]["move"] == "roll":
+		_play(pet, "raccoon_ball", 1.0)
+		var radius = SPECIES[pet["species"]]["ball"][2] * pet["scale"]
+		pet["spin"].rotation.x -= v * delta / max(radius, 0.05)
+	else:
+		_play(pet, "wolf_walk", _stride_rate(v))
 
 
 # how fast the legs go: in step with a walk or a run, and still quicker (but not silly) when it races
@@ -695,12 +735,17 @@ func _stride_rate(speed):
 	return min(4.0 + (speed - RUN_SPEED) * 0.15, 9.0)
 
 
-# --- a cat in its owner's lap ---
+# --- in its owner's lap (a cat) or on their head (a raccoon) ---
 
 const LAP_HOP_TIME = 0.45
 const LAP_FORWARD = 0.22   # how far in front of the thighs' middle it lies, times the player's size
 const LAP_DROP = 0.05      # how far below the thighs' middle its belly sits, so it rests on the lap
 const CURL_CENTRE = Vector3(-0.253, 0, -0.128) # middle of the curled-up cat, from its origin, at size 1
+const HEAD_TOP = 1.02      # from a player's head bone up to the top of their head, times their size
+const PERCH = {
+	"lap": {"anim": "cat_curl", "turn": -PI / 2.0, "hop": 0.15},
+	"head": {"anim": "raccoon_flop", "turn": 0.0, "hop": 0.6},
+}
 
 
 # the top of a sitting player's thighs, from their skeleton, whatever their size
@@ -719,17 +764,29 @@ func _lap_point(owner_node):
 	return owner_node.global_transform.origin + _facing(owner_node) * 0.25 * size + Vector3.UP * (0.35 * size - owner_node.global_transform.basis.y.length())
 
 
-# where the cat's origin goes so the middle of its curl sits on the lap, lying across it
-func _lap_spot(pet, owner_node):
-	var yaw = atan2(-_facing(owner_node).x, -_facing(owner_node).z) - PI / 2.0
+func _head_top(owner_node):
+	var size = _player_size(owner_node)
+	var sk = owner_node.get_node_or_null(SKELETON_PATH)
+	if sk != null and sk.find_bone("head") >= 0:
+		var head = sk.global_transform.xform(sk.get_bone_global_pose(sk.find_bone("head")).origin)
+		return head + Vector3.UP * HEAD_TOP * size
+	return owner_node.global_transform.origin + Vector3.UP * 1.0 * size
+
+
+# where its origin goes: a cat with the middle of its curl on the lap, lying across it;
+# a raccoon flopped belly-down on top of the head, facing the same way as its owner
+func _perch_spot(pet, owner_node, mode):
+	var yaw = atan2(-_facing(owner_node).x, -_facing(owner_node).z) + PERCH[mode]["turn"]
+	if mode == "head":
+		return [_head_top(owner_node), yaw]
 	var basis = Basis(Vector3.UP, yaw)
 	# a little forward of the thighs' middle, so it lies on the lap and not inside its owner
 	var forward = _facing(owner_node) * LAP_FORWARD * _player_size(owner_node)
 	return [_lap_point(owner_node) + forward - basis.xform(CURL_CENTRE * pet["scale"]), yaw]
 
 
-# walks up to its sitting owner, hops into their lap and curls up there
-func _curl_in_lap(pet, owner_node, delta):
+# goes up to its sitting owner, hops up (into the lap or onto the head) and settles there
+func _perch(pet, owner_node, delta, mode):
 	var node = pet["node"]
 	if pet["lap"] == "" or pet["lap"] == "down":
 		pet["lap"] = "go"
@@ -745,27 +802,27 @@ func _curl_in_lap(pet, owner_node, delta):
 			pos += to / dist * min(pet["speed"] * delta, dist)
 			node.global_transform.origin = _ground(node, pos, _feet_y(owner_node), pos.y, delta)
 			node.rotation.y = lerp_angle(node.rotation.y, atan2(-to.x, -to.z), clamp(delta * 10.0, 0.0, 1.0))
-			_play(pet, "wolf_walk", _stride_rate(pet["speed"]))
+			_locomote(pet, delta)
 			return
 		pet["speed"] = 0.0
 		pet["lap"] = "hop"
 		pet["hop_t"] = 0.0
 		pet["hop_from"] = node.global_transform.origin
-	var target = _lap_spot(pet, owner_node)
+	var target = _perch_spot(pet, owner_node, mode)
 	if pet["lap"] == "hop":
 		pet["hop_t"] += delta
 		var k = clamp(pet["hop_t"] / LAP_HOP_TIME, 0.0, 1.0)
-		var arc = sin(k * PI) * (0.25 * pet["scale"] + 0.15)
+		var arc = sin(k * PI) * (0.25 * pet["scale"] + PERCH[mode]["hop"] * _player_size(owner_node))
 		node.global_transform.origin = pet["hop_from"].linear_interpolate(target[0], k) + Vector3.UP * arc
 		node.rotation.y = lerp_angle(node.rotation.y, target[1], k)
 		_play(pet, "wolf_sit", 1.0)
 		if k >= 1.0:
 			pet["lap"] = "in"
 		return
-	# curled up, staying with the lap as its owner moves about in their seat
+	# settled, staying with its owner as they move about in their seat
 	node.global_transform.origin = target[0]
 	node.rotation.y = lerp_angle(node.rotation.y, target[1], clamp(delta * 8.0, 0.0, 1.0))
-	_play(pet, "cat_curl", 1.0)
+	_play(pet, PERCH[mode]["anim"], 1.0)
 
 
 func _hop_down(pet, owner_node, delta):
@@ -779,7 +836,7 @@ func _hop_down(pet, owner_node, delta):
 	spot = _ground(node, spot, _feet_y(owner_node))
 	pet["hop_t"] += delta
 	var k = clamp(pet["hop_t"] / LAP_HOP_TIME, 0.0, 1.0)
-	node.global_transform.origin = pet["hop_from"].linear_interpolate(spot, k) + Vector3.UP * sin(k * PI) * 0.2
+	node.global_transform.origin = pet["hop_from"].linear_interpolate(spot, k) + Vector3.UP * sin(k * PI) * (0.2 + 0.2 * pet["scale"])
 	_play(pet, "wolf_idle", 1.0)
 	if k >= 1.0:
 		pet["lap"] = ""
@@ -977,7 +1034,7 @@ func _update_pats(delta):
 				pos += to / dist * step
 				node.global_transform.origin = _ground(node, pos, spot.y, pos.y, delta)
 				node.rotation.y = lerp_angle(node.rotation.y, atan2(-to.x, -to.z), clamp(delta * 10.0, 0.0, 1.0))
-				_play(pet, "wolf_walk", 1.8)
+				_locomote(pet, delta, WALK_SPEED)
 			continue
 
 		node.rotation.y = lerp_angle(node.rotation.y, face_yaw, clamp(delta * 8.0, 0.0, 1.0))
@@ -1495,6 +1552,18 @@ func _draw_face(b, kind):
 		b.draw_circle(c + Vector2(-5, -3), 1.7, dark)
 		b.draw_circle(c + Vector2(5, -3), 1.7, dark)
 		b.draw_circle(c + Vector2(0, 10.5), 2.2, dark)
+	elif kind == "raccoon":
+		var mask = Color(0.2, 0.22, 0.26)
+		for sx in [-1, 1]:
+			b.draw_circle(c + Vector2(sx * 8.5, -9), 4.5, fur)
+			b.draw_circle(c + Vector2(sx * 8.5, -9), 2.2, mask)
+		b.draw_circle(c + Vector2(0, 1), 11.5, fur)
+		b.draw_colored_polygon(PoolVector2Array([c + Vector2(-11, -4), c + Vector2(-4, -3), c + Vector2(0, -1), c + Vector2(4, -3),
+			c + Vector2(11, -4), c + Vector2(10, 2), c + Vector2(4, 2), c + Vector2(0, 1), c + Vector2(-4, 2), c + Vector2(-10, 2)]), mask)
+		b.draw_circle(c + Vector2(-5, -1), 1.6, fur)
+		b.draw_circle(c + Vector2(5, -1), 1.6, fur)
+		b.draw_circle(c + Vector2(0, 6), 4.0, Color(0.88, 0.89, 0.9))
+		b.draw_circle(c + Vector2(0, 4.6), 1.6, dark)
 	else:
 		for sx in [-1, 1]:
 			b.draw_colored_polygon(PoolVector2Array([c + Vector2(sx * 12, -2), c + Vector2(sx * 11, -15), c + Vector2(sx * 2, -9)]), fur)

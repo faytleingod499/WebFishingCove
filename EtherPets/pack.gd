@@ -2,7 +2,7 @@
 # Run from this folder with:  godot --no-window -s pack.gd
 extends SceneTree
 
-const FILES = ["main.gd", "pet_area.gd", "wolf.scn", "cat.scn", "howl.wav"]
+const FILES = ["main.gd", "pet_area.gd", "wolf.scn", "cat.scn", "raccoon.scn", "howl.wav", "chitter.wav"]
 
 func _init():
 	var out = OS.get_environment("PCK_OUT")
