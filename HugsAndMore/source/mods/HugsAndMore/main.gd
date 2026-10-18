@@ -15,7 +15,7 @@ extends Node
 # Everything goes through the Steam lobby member data ("hugsandmore"), so every player with the mod sees
 # it. Players without the mod see nothing unusual.
 
-const VERSION = "1.2.1"
+const VERSION = "1.2.2"
 const SYNC_KEY = "hugsandmore"   # "1;<seq>;<ask|yes>;<emote>;<target steam id>;<the seq it answers>"
 const SKELETON_PATH = "body/player_body/Armature/Skeleton"
 const POPUP_ID = "HUGSANDMORE"
@@ -544,7 +544,7 @@ func _pose_hug(p):
 	# little hearts rise over them now and then
 	if not p["ending"] and p["t"] >= p["next_hearts"]:
 		p["next_hearts"] = p["t"] + 1.6
-		_hearts(p["pa"], Vector3(mid.x, max(_head_y(p["pa"]), _head_y(p["pb"])) + 0.25 * max(sa, sb), mid.z))
+		_hearts(p["pa"], Vector3(mid.x, max(_head_y(p["pa"]), _head_y(p["pb"])) + 0.8 * max(sa, sb), mid.z))
 
 
 func _hug_one(me_node, other, dir, mid, gap, s_me, s_other, sway, w, tilt_side):
@@ -608,23 +608,25 @@ func _pose_kiss(p):
 	var mid = frame[1]
 	var sa = _player_size(p["pa"])
 	var sb = _player_size(p["pb"])
-	var gap = 0.95 * (sa + sb) / 2.0          # the heads are big: stand well apart and lean in
-	var meet_y = min(_head_y(p["pa"]), _head_y(p["pb"])) + 0.03 * min(sa, sb)
 	var lean = smoothstep(0.0, 0.5, p["t"])
-	_kiss_one(p["pa"], dir, mid, gap, sa, meet_y, lean, p["w"])
-	_kiss_one(p["pb"], -dir, mid, gap, sb, meet_y, lean, p["w"])
+	_kiss_one(p["pa"], dir, mid, sa, lean, p["w"])
+	_kiss_one(p["pb"], -dir, mid, sb, lean, p["w"])
 	if p["t"] >= 0.55 and not p["slapped"]:
 		p["slapped"] = true
-		var at = Vector3(mid.x, meet_y, mid.z)
+		var at = Vector3(mid.x, min(_head_y(p["pa"]), _head_y(p["pb"])) + 0.55 * min(sa, sb), mid.z)   # about where the faces meet
 		_play_sound(p["pa"], kiss_sound, at, 1.0, 0.0)
-		_hearts(p["pa"], at + Vector3.UP * 0.15 * min(sa, sb))
+		_hearts(p["pa"], at + Vector3.UP * 0.4 * min(sa, sb))
 		for node in [p["pa"], p["pb"]]:
 			if is_instance_valid(node) and node.has_method("_face_emote"):
 				node._face_emote("kiss")
 
 
-func _kiss_one(me_node, dir, mid, gap, s_me, meet_y, lean, w):
-	var body = _place_body(me_node, dir, mid, gap, 0.0, w)
+# The heads are huge (about 1.15 deep at size 1, the head bone being only the base of the head), so each
+# one stands back from the middle by half a head plus a little, then leans forward just a little (10
+# degrees), which brings the fronts of the two heads together.
+const KISS_LEAN = 10.0
+func _kiss_one(me_node, dir, mid, s_me, lean, w):
+	var body = _place_body(me_node, dir, mid, 2.0 * 0.62 * s_me, 0.0, w)
 	if body == null:
 		return
 	var sk = body["sk"]
@@ -634,22 +636,14 @@ func _kiss_one(me_node, dir, mid, gap, s_me, meet_y, lean, w):
 		return
 	var g_torso = body["rebase"] * sk.get_bone_global_pose_no_override(torso)
 	var g_head = body["rebase"] * sk.get_bone_global_pose_no_override(head)
-	var axis_w = Vector3.UP.cross(dir).normalized()          # turning about this tips me forward
-	var axis = body["Winv"].basis.xform(axis_w).normalized()
-	# meet_y is about face height; the head bone sits a little below that
-	# and the head bone stays this far back from the middle, so the two big heads just touch at the snouts
-	var want = body["Winv"].xform(Vector3(mid.x, meet_y - 0.3 * s_me, mid.z) - dir * 0.3 * s_me)
-	# how far to lean so my face gets to the meeting point
-	var best = 0.0
-	var best_cost = 1e9
-	for i in range(31):
-		var deg = -45.0 + i * 3.0
-		var h = g_torso.origin + (g_head.origin - g_torso.origin).rotated(axis, deg2rad(deg))
-		var cost = h.distance_to(want)
-		if cost < best_cost:
-			best_cost = cost
-			best = deg
-	var tip = Basis(axis, deg2rad(best * lean))
+	var axis = body["Winv"].basis.xform(Vector3.UP.cross(dir)).normalized()
+	var toward = body["Winv"].basis.xform(dir).normalized()
+	# whichever way round the axis is, tip towards the other one
+	var deg = KISS_LEAN
+	var tipped = (g_head.origin - g_torso.origin).rotated(axis, deg2rad(deg))
+	if (tipped - (g_head.origin - g_torso.origin)).dot(toward) < 0:
+		deg = -deg
+	var tip = Basis(axis, deg2rad(deg * lean))
 	sk.set_bone_global_pose_override(torso, Transform(tip * g_torso.basis, g_torso.origin), w, true)
 
 
@@ -657,7 +651,7 @@ func _head_y(player):
 	var sk = player.get_node_or_null(SKELETON_PATH)
 	if sk == null or sk.find_bone("head") < 0:
 		return player.global_transform.origin.y + 0.7 * _player_size(player)
-	return sk.global_transform.xform(sk.get_bone_global_pose_no_override(sk.find_bone("head")).origin).y + 0.25 * _player_size(player)
+	return sk.global_transform.xform(sk.get_bone_global_pose_no_override(sk.find_bone("head")).origin).y
 
 
 # a puff of the game's own hearts at a spot in the world

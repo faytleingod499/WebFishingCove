@@ -1,6 +1,6 @@
-## 1.2.1
-- Kiss: the two stand further apart and lean in just until their faces meet, instead of their big heads
-  sinking into each other.
+## 1.2.2
+- Kiss: the two stand about a head's length apart and only lean forward a little, so the fronts of their
+  faces meet instead of their big heads sinking into each other.
 
 ## 1.2.0
 - New: **kiss**. You lean in to each other, pucker up, and the game's kiss sound and hearts play.
