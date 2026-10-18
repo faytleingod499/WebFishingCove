@@ -6,7 +6,7 @@ extends Node
 # its colours. Your choices are shared through the Steam lobby, so other players who have this mod
 # see your pet exactly as you made it. Players without the mod do not see pets. Works on any server.
 
-const VERSION = "2.8.1"
+const VERSION = "2.8.2"
 const CONFIG_PATH = "user://etherpets.json"
 const OLD_CONFIG_PATH = "user://wolfpets.json" # from when it was Wolf Pets
 const SHADOW_PATH = "res://Scenes/Entities/Shadow/shadow.tscn"
@@ -51,10 +51,11 @@ const PARTS = [
 	["shine", "Eye shine", "pet_white"],
 	["whiskers", "Whiskers", "pet_whiskers"],
 	["muzzle", "Muzzle", "pet_muzzle"],
+	["legs", "Legs", "pet_legs"],
 ]
 # a part with no colour of its own (an older palette, or someone on an older version) takes
 # the colour of the part it used to share, or a fixed colour ("#...")
-const DERIVE = {"paws": "belly", "muzzle": "belly", "tail": "back", "mask": "back", "earback": "back", "mouth": "nose",
+const DERIVE = {"paws": "belly", "muzzle": "belly", "legs": "paws", "tail": "back", "mask": "back", "earback": "back", "mouth": "nose",
 	"tongue": "ears", "shine": "#ffffff", "whiskers": "#f2f2f2"}
 
 # every kind of pet: its model, how big it is, its noises, and its ready-made looks.
@@ -90,8 +91,8 @@ const SPECIES = {
 	},
 	"raccoon": {
 		"label": "Raccoon", "model": "res://mods/EtherPets/raccoon.scn", "scale": 0.6, "move": "roll", "sit": "head",
-		"parts": ["fur", "mask", "belly", "muzzle", "paws", "tail", "eyes", "shine", "nose", "mouth", "ears"],
-		"labels": {"paws": "Legs & paws", "tail": "Tail rings", "muzzle": "Face"},
+		"parts": ["fur", "mask", "belly", "muzzle", "legs", "paws", "tail", "eyes", "shine", "nose", "mouth", "ears"],
+		"labels": {"legs": "Front legs", "tail": "Tail rings", "muzzle": "Face"},
 		"derive": {"paws": "back"},                                        # its dark legs were "back" before
 		"roll_dist": 2.8,                                                 # one somersault, curled up and back onto its feet
 		"anims": {"wolf_sit": "raccoon_sit", "wolf_lie": "raccoon_flop"}, # its own loaf and sprawl
