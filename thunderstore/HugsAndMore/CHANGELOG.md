@@ -1,3 +1,7 @@
+## 1.1.1
+- Fixed: other players sometimes never found out you have the mod (so no prompt appeared), when the
+  announcement was sent while still joining the lobby. It is now checked and resent until it sticks.
+
 ## 1.1.0
 - New: **high five**.
 - A small "F  Interact" tag over nearby players with the mod replaces the game's big interact bubble. F opens

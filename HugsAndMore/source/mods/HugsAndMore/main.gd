@@ -13,7 +13,7 @@ extends Node
 # Everything goes through the Steam lobby member data ("hugsandmore"), so every player with the mod sees
 # it. Players without the mod see nothing unusual.
 
-const VERSION = "1.1.0"
+const VERSION = "1.1.1"
 const SYNC_KEY = "hugsandmore"   # "1;<seq>;<ask|yes>;<emote>;<target steam id>;<the seq it answers>"
 const SKELETON_PATH = "body/player_body/Armature/Skeleton"
 const POPUP_ID = "HUGSANDMORE"
@@ -46,6 +46,8 @@ var my_ref = 0
 var my_since = 0.0
 var sync_dirty = false
 var announced_lobby = 0    # the lobby I've told I have the mod
+var next_announce = 0.0
+var seen_mod = {}          # players already reported in the log as having the mod
 
 # everyone's state, read from the lobby: steam id -> {seq, action, emote, target, ref, mod}
 var states = {}
@@ -105,11 +107,19 @@ func _process(delta):
 	if my_action != "" and clock - my_since > ASK_TIME and not _busy(me):
 		_set_state("", "", 0, 0)
 
-	# tell the lobby once that I have the mod, so others get the prompt on me even while I'm idle
-	if lobby > 0 and lobby != announced_lobby and steam != null and steam.has_method("setLobbyMemberData"):
-		announced_lobby = lobby
-		steam.setLobbyMemberData(lobby, SYNC_KEY + "_v", VERSION)
-		sync_dirty = true
+	# tell the lobby that I have the mod, so others get the prompt on me even while I'm idle. Checked again
+	# every few seconds: a write made while still joining the lobby is lost, so it is redone until it sticks.
+	if lobby > 0 and steam != null and steam.has_method("setLobbyMemberData") and clock >= next_announce:
+		next_announce = clock + 3.0
+		var mine = str(steam.getLobbyMemberData(lobby, me, SYNC_KEY + "_v")) if steam.has_method("getLobbyMemberData") else ""
+		if mine != VERSION:
+			steam.setLobbyMemberData(lobby, SYNC_KEY + "_v", VERSION)
+			if lobby != announced_lobby:
+				print("[HugsAndMore] ", VERSION, " announced in lobby ", lobby)
+			announced_lobby = lobby
+			sync_dirty = true
+		elif str(steam.getLobbyMemberData(lobby, me, SYNC_KEY)) != _state_text():
+			sync_dirty = true # my state didn't stick either
 
 	read_timer += delta
 	if read_timer >= 0.2:
@@ -189,6 +199,9 @@ func _read_states(lobby, me):
 		# players with the mod announce it under "hugsandmore_v" (their state is empty while idle)
 		state["mod"] = text != "" or str(steam.getLobbyMemberData(lobby, int(id), SYNC_KEY + "_v")) != ""
 		states[int(id)] = state
+		if state["mod"] and not seen_mod.has(int(id)):
+			seen_mod[int(id)] = true
+			print("[HugsAndMore] ", _name_of(int(id)), " has the mod")
 
 
 # --- the small prompt over the nearest player with the mod ---
