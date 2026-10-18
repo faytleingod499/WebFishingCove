@@ -6,7 +6,7 @@ extends Node
 # its colours. Your choices are shared through the Steam lobby, so other players who have this mod
 # see your pet exactly as you made it. Players without the mod do not see pets. Works on any server.
 
-const VERSION = "2.2.0"
+const VERSION = "2.3.0"
 const CONFIG_PATH = "user://etherpets.json"
 const OLD_CONFIG_PATH = "user://wolfpets.json" # from when it was Wolf Pets
 const SHADOW_PATH = "res://Scenes/Entities/Shadow/shadow.tscn"
@@ -73,8 +73,9 @@ const SPECIES = {
 		],
 	},
 	"raccoon": {
-		"label": "Raccoon", "model": "res://mods/EtherPets/raccoon.scn", "scale": 0.5, "move": "roll", "sit": "head",
-		"ball": [0.51, 0.36, 0.53],                                       # height, forward offset, radius
+		"label": "Raccoon", "model": "res://mods/EtherPets/raccoon.scn", "scale": 0.6, "move": "roll", "sit": "head",
+		"ball": [0.48, 0.24, 0.47],                                       # height, forward offset, radius
+		"anims": {"wolf_sit": "raccoon_sit", "wolf_lie": "raccoon_flop"}, # its own loaf and sprawl
 		"pet_sound": "res://Sounds/cat_purr.ogg", "pet_pitch": 1.35,      # a happy trill
 		"call_sound": "res://mods/EtherPets/chitter.wav", "call_pitch": 1.0, # a chitter
 		"call_time": 0.85, "call_lift": 15.0,
@@ -335,7 +336,7 @@ func _update_pets(delta, net):
 		if pet["area"] != null and is_instance_valid(pet["area"]):
 			var name = str(wanted[key][4])
 			pet["area"].text = "Pet " + (name if name != "" else SPECIES[pet["species"]]["label"].to_lower())
-			pet["area"].visible = pet["pat"] == null and pet["lap"] == "" and not pet["anim_name"] in ["wolf_sit", "wolf_lie", "cat_curl", "raccoon_flop"]
+			pet["area"].visible = pet["pat"] == null and pet["lap"] == "" and not pet["anim_name"] in ["wolf_sit", "wolf_lie", "cat_curl", "raccoon_flop", "raccoon_sit"]
 
 
 # --- making a pet ---
@@ -665,7 +666,7 @@ func _move_pet(pet, owner_node, delta):
 
 	# turn to where it walks, or to its owner while standing; once it sits or lies down it stays
 	# put until it gets up to follow, so its owner can sit right beside it
-	var settled = pet["anim_name"] in ["wolf_sit", "wolf_lie", "cat_curl", "raccoon_flop"]
+	var settled = pet["anim_name"] in ["wolf_sit", "wolf_lie", "cat_curl", "raccoon_flop", "raccoon_sit"]
 	if dist > 0.05 and (pet["speed"] > 0.3 or not settled):
 		var yaw = atan2(-dir.x, -dir.z)
 		node.rotation.y = lerp_angle(node.rotation.y, yaw, clamp(delta * (8.0 if pet["speed"] > 0.3 else 3.0), 0.0, 1.0))
@@ -886,6 +887,7 @@ func _play(pet, name, rate):
 	var anim = pet["anim"]
 	if anim == null:
 		return
+	name = SPECIES[pet["species"]].get("anims", {}).get(name, name)
 	anim.playback_speed = rate
 	if pet["anim_name"] != name and anim.has_animation(name):
 		pet["anim_name"] = name
