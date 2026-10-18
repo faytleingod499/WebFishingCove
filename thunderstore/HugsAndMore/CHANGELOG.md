@@ -1,3 +1,7 @@
+## 1.2.3
+- Hug: each of you steps a little to your own left and tips your head further that way, so your heads rest
+  past each other side by side instead of merging.
+
 ## 1.2.2
 - Kiss: the two stand about a head's length apart and only lean forward a little, so the fronts of their
   faces meet instead of their big heads sinking into each other.

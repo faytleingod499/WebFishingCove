@@ -15,7 +15,7 @@ extends Node
 # Everything goes through the Steam lobby member data ("hugsandmore"), so every player with the mod sees
 # it. Players without the mod see nothing unusual.
 
-const VERSION = "1.2.2"
+const VERSION = "1.2.3"
 const SYNC_KEY = "hugsandmore"   # "1;<seq>;<ask|yes>;<emote>;<target steam id>;<the seq it answers>"
 const SKELETON_PATH = "body/player_body/Armature/Skeleton"
 const POPUP_ID = "HUGSANDMORE"
@@ -509,6 +509,21 @@ func _shoulder_y(player):
 	return sk.global_transform.xform(sk.get_bone_global_pose_no_override(sk.find_bone("arm.l")).origin).y
 
 
+# tips the head sideways about the facing direction, towards the given side
+func _tilt_head_toward(body, axis_w, side, deg, w):
+	var sk = body["sk"]
+	var head = sk.find_bone("head")
+	if head < 0:
+		return
+	var g = body["rebase"] * sk.get_bone_global_pose_no_override(head)
+	var axis = body["Winv"].basis.xform(axis_w).normalized()
+	var up = g.basis.xform(Vector3.UP)
+	var side_s = body["Winv"].basis.xform(side).normalized()
+	if (up.rotated(axis, deg2rad(deg)) - up).dot(side_s) < 0:
+		deg = -deg
+	sk.set_bone_global_pose_override(head, Transform(Basis(axis, deg2rad(deg)) * g.basis, g.origin), w, true)
+
+
 func _tilt_head(body, axis_w, deg, w):
 	var sk = body["sk"]
 	var head = sk.find_bone("head")
@@ -547,19 +562,24 @@ func _pose_hug(p):
 		_hearts(p["pa"], Vector3(mid.x, max(_head_y(p["pa"]), _head_y(p["pb"])) + 0.8 * max(sa, sb), mid.z))
 
 
+# The heads are huge (about 1.15 wide at size 1), so they can't both be in the middle: each body steps a
+# little to its own left and each head tips further that way, so the heads go past each other side by
+# side, the way two people rest their heads past each other's shoulders.
+const HUG_SIDESTEP = 0.22   # times my size
+const HUG_HEAD_TIP = 26.0   # degrees
 func _hug_one(me_node, other, dir, mid, gap, s_me, s_other, sway, w, tilt_side):
-	var body = _place_body(me_node, dir, mid, gap, sway, w)
+	var left = Vector3.UP.cross(dir).normalized()
+	var body = _place_body(me_node, dir, mid + left * HUG_SIDESTEP * s_me, gap, sway, w)
 	if body == null:
 		return
-	var their_spot = mid + dir * gap / 2.0
+	var their_spot = mid + dir * gap / 2.0 - left * HUG_SIDESTEP * s_other  # they step to their left, my right
 	var their_feet = other.global_transform.origin.y - 1.0 * s_other
 	var height = min(_shoulder_y(me_node) - 0.12 * s_me, _shoulder_y(other) - 0.06 * s_other)
 	height = max(height, their_feet + 0.35 * s_other)
 	var radius = 0.24 * s_other                # roughly how round the other's body is
-	var left = Vector3.UP.cross(dir).normalized()
 	var centre = Vector3(their_spot.x, height, their_spot.z) + dir * radius * 0.4
 	_reach(body, 0, [centre, left * radius * 0.6], [Vector3.DOWN * 0.6 - dir * 0.2, left], left, w)
-	_tilt_head(body, dir, 12.0 * tilt_side, w)
+	_tilt_head_toward(body, dir, left, HUG_HEAD_TIP, w)
 
 
 # A high five: both face each other an arm's length apart, raise their right hands and slap them
