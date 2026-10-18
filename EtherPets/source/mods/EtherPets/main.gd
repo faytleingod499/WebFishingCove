@@ -6,7 +6,7 @@ extends Node
 # its colours. Your choices are shared through the Steam lobby, so other players who have this mod
 # see your pet exactly as you made it. Players without the mod do not see pets. Works on any server.
 
-const VERSION = "2.1.0"
+const VERSION = "2.1.1"
 const CONFIG_PATH = "user://etherpets.json"
 const OLD_CONFIG_PATH = "user://wolfpets.json" # from when it was Wolf Pets
 const SHADOW_PATH = "res://Scenes/Entities/Shadow/shadow.tscn"
@@ -698,6 +698,7 @@ func _stride_rate(speed):
 # --- a cat in its owner's lap ---
 
 const LAP_HOP_TIME = 0.45
+const LAP_FORWARD = 0.22   # how far in front of the thighs' middle it lies, times the player's size
 const CURL_CENTRE = Vector3(-0.253, 0, -0.128) # middle of the curled-up cat, from its origin, at size 1
 
 
@@ -721,7 +722,9 @@ func _lap_point(owner_node):
 func _lap_spot(pet, owner_node):
 	var yaw = atan2(-_facing(owner_node).x, -_facing(owner_node).z) - PI / 2.0
 	var basis = Basis(Vector3.UP, yaw)
-	return [_lap_point(owner_node) - basis.xform(CURL_CENTRE * pet["scale"]), yaw]
+	# a little forward of the thighs' middle, so it lies on the lap and not inside its owner
+	var forward = _facing(owner_node) * LAP_FORWARD * _player_size(owner_node)
+	return [_lap_point(owner_node) + forward - basis.xform(CURL_CENTRE * pet["scale"]), yaw]
 
 
 # walks up to its sitting owner, hops into their lap and curls up there
