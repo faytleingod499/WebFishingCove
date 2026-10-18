@@ -6,7 +6,7 @@ extends Node
 # Your colours are shared through the Steam lobby, so other players who have this mod see your wolf
 # exactly as you made it. Players without the mod do not see pets at all. Works on any server.
 
-const VERSION = "1.6.1"
+const VERSION = "1.7.0"
 const CONFIG_PATH = "user://wolfpets.json"
 const MODEL_PATH = "res://mods/WolfPets/wolf_pet.scn"
 const SHADOW_PATH = "res://Scenes/Entities/Shadow/shadow.tscn"
@@ -16,6 +16,7 @@ const AREA_SCRIPT = "res://mods/WolfPets/pet_area.gd"
 const HOWL_PATH = "res://mods/WolfPets/howl.wav"
 const WHINE_PATH = "res://Sounds/dog_whine.ogg"  # the game's own dog whine, pitched up a little
 const HOWL_TIME = 2.0
+const HOWL_COOLDOWN_MS = 120000  # a howl at most every 2 minutes
 const SKELETON_PATH = "body/player_body/Armature/Skeleton"
 const POPUP_ID = "WOLFPETS"
 const DEFAULT_PAW_POS = Vector2(16, 140)
@@ -56,6 +57,8 @@ var shadow_scene = null
 # my pet
 var show_pet = true
 var pet_size = 1.0 # times the normal size
+var howl_on = true # answers its owner's bark with a howl
+var howl_box
 var pet_name = ""  # the name of the palette it wears, shown above it
 var name_layer
 var menu_title
@@ -145,7 +148,7 @@ func _sync_text():
 	var list = []
 	for part in PARTS:
 		list.append(str(colors[part[0]]))
-	return "1;" + ("1" if show_pet else "0") + ";" + PoolStringArray(list).join(",") + ";" + ("%.2f" % pet_size) + ";" + _clean_name(pet_name)
+	return "1;" + ("1" if show_pet else "0") + ";" + PoolStringArray(list).join(",") + ";" + ("%.2f" % pet_size) + ";" + _clean_name(pet_name) + ";" + ("1" if howl_on else "0")
 
 
 # names travel inside the lobby text, so they lose the separators and stay short
@@ -164,6 +167,7 @@ func _parse_sync(text):
 			cfg["colors"][PARTS[i][0]] = list[i]
 	cfg["size"] = clamp(float(bits[3]), SIZE_MIN, SIZE_MAX) if bits.size() > 3 and bits[3].is_valid_float() else 1.0
 	cfg["name"] = _clean_name(bits[4]) if bits.size() > 4 else ""
+	cfg["howl"] = bits[5] != "0" if bits.size() > 5 else true
 	return cfg
 
 
@@ -231,11 +235,11 @@ func _update_pets(delta, net):
 		if not _is_real_player(player):
 			continue
 		if player.get("controlled") == true:
-			wanted["me"] = [player, show_pet, colors, pet_size, pet_name]
+			wanted["me"] = [player, show_pet, colors, pet_size, pet_name, howl_on]
 		else:
 			var id = player.get("owner_id")
 			if remote_cfg.has(id) and remote_cfg[id]["show"]:
-				wanted[id] = [player, true, remote_cfg[id]["colors"], remote_cfg[id]["size"], remote_cfg[id]["name"]]
+				wanted[id] = [player, true, remote_cfg[id]["colors"], remote_cfg[id]["size"], remote_cfg[id]["name"], remote_cfg[id]["howl"]]
 
 	for key in pets.keys():
 		var pet = pets[key]
@@ -265,6 +269,7 @@ func _update_pets(delta, net):
 		if pet["pat"] == null:
 			_move_pet(pet, owner_node, delta)
 		_place_label(pet, wanted[key][4])
+		pet["howl_on"] = wanted[key][5]
 		_listen_for_bark(pet, owner_node, delta)
 		# "Pet wolf" is offered while it stands or walks, not while it sits, lies down or is being petted
 		if pet["area"] != null and is_instance_valid(pet["area"]):
@@ -328,7 +333,8 @@ func _make_pet(owner_node):
 		"speed": 0.0, "still": 0.0, "anim_name": "", "sig": "", "moving": false, "sat": 0.0,
 		"area": area, "pat": null, "skeleton": model.find_node("Skeleton", true, false),
 		"scale": PET_SCALE, "size": 1.0, "side": 0, "label": _make_label(),
-		"voice": _make_voice(node), "barking": false, "howl_wait": -1.0, "howl_t": -1.0}
+		"voice": _make_voice(node), "barking": false, "howl_wait": -1.0, "howl_t": -1.0,
+		"howl_on": true, "howl_ready_at": 0}
 	_play(pet, "wolf_idle", 1.0)
 	return pet
 
@@ -392,8 +398,11 @@ func _listen_for_bark(pet, owner_node, delta):
 		var player = owner_node.get_node_or_null(name)
 		if player != null and player.playing:
 			barking = true
-	if barking and not pet["barking"] and pet["howl_t"] < 0.0 and pet["howl_wait"] < 0.0:
+	var now = OS.get_ticks_msec()
+	if barking and not pet["barking"] and pet["howl_on"] and now >= pet["howl_ready_at"] \
+			and pet["howl_t"] < 0.0 and pet["howl_wait"] < 0.0:
 		pet["howl_wait"] = 0.35
+		pet["howl_ready_at"] = now + HOWL_COOLDOWN_MS
 	pet["barking"] = barking
 	if pet["howl_wait"] >= 0.0:
 		pet["howl_wait"] -= delta
@@ -992,6 +1001,16 @@ func _build_ui():
 	show_box.connect("toggled", self, "_on_show_toggled")
 	column.add_child(show_box)
 
+	howl_box = CheckBox.new()
+	howl_box.text = "Howl when I bark"
+	howl_box.focus_mode = Control.FOCUS_NONE
+	howl_box.add_color_override("font_color", Color(1, 1, 1))
+	howl_box.add_color_override("font_color_hover", Color(1, 1, 1))
+	howl_box.add_color_override("font_color_pressed", Color(1, 1, 1))
+	howl_box.connect("toggled", self, "_on_howl_toggled")
+	_add_tooltip(howl_box, "Howl", "Your wolf howls back when you bark or meow, at most once every 2 minutes")
+	column.add_child(howl_box)
+
 	var size_row = HBoxContainer.new()
 	size_row.add_constant_override("separation", 8)
 	column.add_child(size_row)
@@ -1190,6 +1209,10 @@ func _apply_to_pickers():
 		show_box.set_block_signals(true)
 		show_box.pressed = show_pet
 		show_box.set_block_signals(false)
+	if howl_box != null:
+		howl_box.set_block_signals(true)
+		howl_box.pressed = howl_on
+		howl_box.set_block_signals(false)
 	for key in pickers.keys():
 		pickers[key].color = Color(colors[key])
 	if size_slider != null:
@@ -1202,6 +1225,12 @@ func _apply_to_pickers():
 func _on_size_changed(value):
 	pet_size = clamp(value, SIZE_MIN, SIZE_MAX)
 	size_label.text = str(int(round(pet_size * 100))) + "%"
+	sync_dirty = true
+	_save_config()
+
+
+func _on_howl_toggled(on):
+	howl_on = on
 	sync_dirty = true
 	_save_config()
 
@@ -1426,6 +1455,8 @@ func _load_config():
 		paw.rect_position = Vector2(float(data["x"]), float(data["y"]))
 	if data.has("show"):
 		show_pet = bool(data["show"])
+	if data.has("howl"):
+		howl_on = bool(data["howl"])
 	if data.has("size"):
 		pet_size = clamp(float(data["size"]), SIZE_MIN, SIZE_MAX)
 	if data.has("name"):
@@ -1457,5 +1488,5 @@ func _save_config():
 	var file = File.new()
 	if file.open(CONFIG_PATH, File.WRITE) != OK:
 		return
-	file.store_string(to_json({"x": paw.rect_position.x, "y": paw.rect_position.y, "show": show_pet, "size": pet_size, "name": pet_name, "colors": colors, "palettes": palettes}))
+	file.store_string(to_json({"x": paw.rect_position.x, "y": paw.rect_position.y, "show": show_pet, "howl": howl_on, "size": pet_size, "name": pet_name, "colors": colors, "palettes": palettes}))
 	file.close()
