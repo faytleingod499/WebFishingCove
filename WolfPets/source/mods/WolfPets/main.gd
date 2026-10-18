@@ -6,7 +6,7 @@ extends Node
 # Your colours are shared through the Steam lobby, so other players who have this mod see your wolf
 # exactly as you made it. Players without the mod do not see pets at all. Works on any server.
 
-const VERSION = "1.3.1"
+const VERSION = "1.4.0"
 const CONFIG_PATH = "user://wolfpets.json"
 const MODEL_PATH = "res://mods/WolfPets/wolf_pet.scn"
 const SHADOW_PATH = "res://Scenes/Entities/Shadow/shadow.tscn"
@@ -53,6 +53,9 @@ var shadow_scene = null
 # my pet
 var show_pet = true
 var pet_size = 1.0 # times the normal size
+var pet_name = ""  # the name of the palette it wears, shown above it
+var name_layer
+var menu_title
 var size_slider
 var size_label
 var colors = {}
@@ -134,7 +137,12 @@ func _sync_text():
 	var list = []
 	for part in PARTS:
 		list.append(str(colors[part[0]]))
-	return "1;" + ("1" if show_pet else "0") + ";" + PoolStringArray(list).join(",") + ";" + ("%.2f" % pet_size)
+	return "1;" + ("1" if show_pet else "0") + ";" + PoolStringArray(list).join(",") + ";" + ("%.2f" % pet_size) + ";" + _clean_name(pet_name)
+
+
+# names travel inside the lobby text, so they lose the separators and stay short
+func _clean_name(text):
+	return str(text).replace(";", "").replace("\n", " ").strip_edges().left(20)
 
 
 func _parse_sync(text):
@@ -147,6 +155,7 @@ func _parse_sync(text):
 		if i < list.size() and list[i].is_valid_html_color():
 			cfg["colors"][PARTS[i][0]] = list[i]
 	cfg["size"] = clamp(float(bits[3]), SIZE_MIN, SIZE_MAX) if bits.size() > 3 and bits[3].is_valid_float() else 1.0
+	cfg["name"] = _clean_name(bits[4]) if bits.size() > 4 else ""
 	return cfg
 
 
@@ -214,11 +223,11 @@ func _update_pets(delta, net):
 		if not _is_real_player(player):
 			continue
 		if player.get("controlled") == true:
-			wanted["me"] = [player, show_pet, colors, pet_size]
+			wanted["me"] = [player, show_pet, colors, pet_size, pet_name]
 		else:
 			var id = player.get("owner_id")
 			if remote_cfg.has(id) and remote_cfg[id]["show"]:
-				wanted[id] = [player, true, remote_cfg[id]["colors"], remote_cfg[id]["size"]]
+				wanted[id] = [player, true, remote_cfg[id]["colors"], remote_cfg[id]["size"], remote_cfg[id]["name"]]
 
 	for key in pets.keys():
 		var pet = pets[key]
@@ -247,6 +256,7 @@ func _update_pets(delta, net):
 			_apply_size(pet, wanted[key][3])
 		if pet["pat"] == null:
 			_move_pet(pet, owner_node, delta)
+		_place_label(pet, wanted[key][4])
 		# "Pet wolf" is offered while it stands or walks, not while it sits, lies down or is being petted
 		if pet["area"] != null and is_instance_valid(pet["area"]):
 			pet["area"].visible = pet["pat"] == null and pet["anim_name"] != "wolf_sit" and pet["anim_name"] != "wolf_lie"
@@ -308,9 +318,52 @@ func _make_pet(owner_node):
 	var pet = {"node": node, "model": model, "anim": anim, "mats": mats, "owner": owner_node,
 		"speed": 0.0, "still": 0.0, "anim_name": "", "sig": "", "moving": false, "sat": 0.0,
 		"area": area, "pat": null, "skeleton": model.find_node("Skeleton", true, false),
-		"scale": PET_SCALE, "size": 1.0, "side": 0}
+		"scale": PET_SCALE, "size": 1.0, "side": 0, "label": _make_label()}
 	_play(pet, "wolf_idle", 1.0)
 	return pet
+
+
+func _make_label():
+	var label = Label.new()
+	label.align = Label.ALIGN_CENTER
+	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	label.visible = false
+	label.add_color_override("font_color", Color(1, 1, 1))
+	label.add_color_override("font_color_shadow", Color(0.05, 0.1, 0.15, 0.9))
+	label.add_constant_override("shadow_as_outline", 1)
+	label.add_constant_override("shadow_offset_x", 1)
+	label.add_constant_override("shadow_offset_y", 1)
+	name_layer.add_child(label)
+	return label
+
+
+# the name floats above its head, smaller the further away it is, like the players' own names
+func _place_label(pet, name):
+	var label = pet["label"]
+	if label == null or not is_instance_valid(label):
+		return
+	var camera = get_viewport().get_camera()
+	var hud = _get_hud()
+	if name == "" or camera == null or not pet["node"].is_visible_in_tree() or (hud != null and hud.get("hud_hidden") == true):
+		label.visible = false
+		return
+	var ws = pet["skeleton"]
+	var top = pet["node"].global_transform.origin + Vector3.UP * 1.3 * pet["scale"]
+	if ws != null and is_instance_valid(ws) and ws.find_bone("head") >= 0:
+		top = ws.global_transform.xform(ws.get_bone_global_pose(ws.find_bone("head")).origin) + Vector3.UP * 0.55 * pet["scale"]
+	var dist = camera.global_transform.origin.distance_to(top)
+	if camera.is_position_behind(top) or dist > 30.0:
+		label.visible = false
+		return
+	if label.text != name:
+		label.text = name
+		label.rect_size = Vector2()
+	var s = clamp(8.0 / max(dist, 0.1), 0.45, 1.0)
+	label.rect_scale = Vector2(s, s)
+	var size = label.get_combined_minimum_size()
+	label.rect_size = size
+	label.rect_position = camera.unproject_position(top) - Vector2(size.x * s / 2.0, size.y * s)
+	label.visible = true
 
 
 func _apply_size(pet, size):
@@ -354,6 +407,9 @@ func _remove_pet(key):
 	var node = pets[key]["node"]
 	if is_instance_valid(node):
 		node.queue_free()
+	var label = pets[key].get("label")
+	if label != null and is_instance_valid(label):
+		label.queue_free()
 	pets.erase(key)
 
 
@@ -754,6 +810,11 @@ func _pose_pat(pat, pet, petter, size):
 # --- the paw button ---
 
 func _build_ui():
+	# pet names sit underneath the game's own windows
+	name_layer = CanvasLayer.new()
+	name_layer.layer = 0
+	add_child(name_layer)
+
 	layer = CanvasLayer.new()
 	layer.layer = 3
 	add_child(layer)
@@ -789,6 +850,7 @@ func _build_ui():
 	var head = HBoxContainer.new()
 	column.add_child(head)
 	var title = Label.new()
+	menu_title = title
 	title.text = "Your Pet"
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	title.add_color_override("font_color", Color(0.75, 0.95, 1.0))
@@ -1029,8 +1091,16 @@ func _on_show_toggled(on):
 	_save_config()
 
 
+func _set_pet_name(name):
+	pet_name = _clean_name(name)
+	if menu_title != null:
+		menu_title.text = pet_name if pet_name != "" else "Your Pet"
+	sync_dirty = true
+
+
 func _on_preset(name):
 	_reset_colors(name)
+	_set_pet_name("")
 	_apply_to_pickers()
 	sync_dirty = true
 	_save_config()
@@ -1046,6 +1116,7 @@ func _on_save_palette(_text = ""):
 		name_field.placeholder_text = "full, delete one first"
 		return
 	palettes[name] = colors.duplicate()
+	_set_pet_name(name)
 	name_field.text = ""
 	name_field.placeholder_text = "palette name"
 	name_field.release_focus()
@@ -1061,6 +1132,7 @@ func _on_use_palette(name):
 		if text.is_valid_html_color():
 			colors[part[0]] = text
 	name_field.text = name # so saving again updates it
+	_set_pet_name(name)
 	_apply_to_pickers()
 	sync_dirty = true
 	_save_config()
@@ -1235,6 +1307,8 @@ func _load_config():
 		show_pet = bool(data["show"])
 	if data.has("size"):
 		pet_size = clamp(float(data["size"]), SIZE_MIN, SIZE_MAX)
+	if data.has("name"):
+		_set_pet_name(str(data["name"]))
 	if typeof(data.get("palettes")) == TYPE_DICTIONARY:
 		for name in data["palettes"].keys():
 			if typeof(data["palettes"][name]) == TYPE_DICTIONARY and palettes.size() < MAX_PALETTES:
@@ -1252,5 +1326,5 @@ func _save_config():
 	var file = File.new()
 	if file.open(CONFIG_PATH, File.WRITE) != OK:
 		return
-	file.store_string(to_json({"x": paw.rect_position.x, "y": paw.rect_position.y, "show": show_pet, "size": pet_size, "colors": colors, "palettes": palettes}))
+	file.store_string(to_json({"x": paw.rect_position.x, "y": paw.rect_position.y, "show": show_pet, "size": pet_size, "name": pet_name, "colors": colors, "palettes": palettes}))
 	file.close()

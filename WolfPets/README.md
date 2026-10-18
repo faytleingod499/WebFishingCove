@@ -19,6 +19,8 @@ Needs [GDWeave](https://github.com/NotNite/GDWeave). Copy the `WolfPets` folder 
   - Pick your own colour for the fur, back, belly & paws, eyes, nose & mouth, and ears & tongue.
   - Type a name and press **Save** to keep the current colours as a palette (up to 12). Click a saved
     palette to put it back on, or **x** to delete it. Saving under the same name updates it.
+  - The name of the palette your wolf wears floats above it, so saving or picking a palette called
+    "Bluey" names your wolf Bluey. The Grey / White / Black looks have no name.
 - Your choice is saved and shared through the Steam lobby, so other players with this mod see your
   wolf in your colours. Players without the mod do not see pets.
 
