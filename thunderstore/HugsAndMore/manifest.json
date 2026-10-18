@@ -1,8 +1,8 @@
 {
     "name": "Hugs_and_More",
-    "version_number": "1.1.1",
+    "version_number": "1.2.0",
     "website_url": "https://github.com/faytleingod499/WebFishingCove",
-    "description": "Emotes for two players who both have the mod: hug or high five. A small prompt over nearby players opens a menu; they get to say yes first. Works on any server.",
+    "description": "Emotes for two players who both have the mod: hug, high five or kiss. A small prompt over nearby players opens a menu; they get to say yes first. Works on any server.",
     "dependencies": [
         "NotNet-GDWeave-2.0.14"
     ]

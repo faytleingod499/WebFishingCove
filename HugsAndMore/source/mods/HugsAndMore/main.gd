@@ -1,7 +1,7 @@
 extends Node
 
 # Hugs and More
-# Emotes for two players who both have the mod: a hug and a high five (more to come).
+# Emotes for two players who both have the mod: a hug, a high five and a kiss (more to come).
 #
 # Walk up to another player who has the mod: a small prompt ("F  Interact") floats above them. Press F and
 # a little window opens with the emotes to pick from. They get an invitation ("<name> wants a hug!") and
@@ -9,21 +9,26 @@ extends Node
 # - Hug: you turn to each other, step in, put your arms around each other and sway a little. It ends
 #   after a few seconds, or as soon as either of you walks away.
 # - High five: you face each other, raise your hands and slap them together above your heads.
+# - Kiss: you lean in to each other, pucker up, the kiss sound plays and hearts float up.
+# Hugs get little floating hearts too.
 #
 # Everything goes through the Steam lobby member data ("hugsandmore"), so every player with the mod sees
 # it. Players without the mod see nothing unusual.
 
-const VERSION = "1.1.1"
+const VERSION = "1.2.0"
 const SYNC_KEY = "hugsandmore"   # "1;<seq>;<ask|yes>;<emote>;<target steam id>;<the seq it answers>"
 const SKELETON_PATH = "body/player_body/Armature/Skeleton"
 const POPUP_ID = "HUGSANDMORE"
 const SLAP_SOUND = "res://Sounds/punch.ogg"
+const KISS_SOUND = "res://Sounds/kiss.ogg"
+const HEARTS = "res://Scenes/Particles/kiss.tscn"   # the game's own little hearts
 
 # the emotes: what the window shows, what the invitation says, the answer button, how long it lasts
-const EMOTE_ORDER = ["hug", "highfive"]
+const EMOTE_ORDER = ["hug", "highfive", "kiss"]
 const EMOTES = {
 	"hug": {"label": "Hug", "ask": "wants a hug!", "answer": "Hug back", "time": 5.0},
 	"highfive": {"label": "High five", "ask": "wants a high five!", "answer": "High five", "time": 1.5},
+	"kiss": {"label": "Kiss", "ask": "wants a kiss!", "answer": "Kiss", "time": 2.2},
 }
 
 const ASK_TIME = 15.0      # an invitation is open this long
@@ -36,6 +41,8 @@ const ACCEPT_KEY = KEY_Y
 
 var steam = null
 var slap_sound = null
+var kiss_sound = null
+var hearts_scene = null
 
 # my own state
 var my_seq = 0
@@ -82,6 +89,10 @@ func _ready():
 		steam = Engine.get_singleton("Steam")
 	if ResourceLoader.exists(SLAP_SOUND):
 		slap_sound = load(SLAP_SOUND)
+	if ResourceLoader.exists(KISS_SOUND):
+		kiss_sound = load(KISS_SOUND)
+	if ResourceLoader.exists(HEARTS):
+		hearts_scene = load(HEARTS)
 	_build_ui()
 
 
@@ -403,7 +414,7 @@ func _update_pairs(players, me, delta):
 				_set_state("", "", 0, 0)
 			continue
 		pairs[key] = {"emote": wanted[key][2], "a": a, "b": b, "t": 0.0, "w": 0.0, "start_a": pa, "start_b": pb,
-			"ending": false, "pa": players[a], "pb": players[b], "slapped": false}
+			"ending": false, "pa": players[a], "pb": players[b], "slapped": false, "next_hearts": 0.3}
 
 	for key in pairs.keys():
 		var p = pairs[key]
@@ -425,10 +436,7 @@ func _update_pairs(players, me, delta):
 			_clear_pose(p)
 			pairs.erase(key)
 			continue
-		if p["emote"] == "hug":
-			_pose_hug(p)
-		else:
-			_pose_highfive(p)
+		call("_pose_" + p["emote"], p)
 
 
 # anyone in a pair at all, even one easing out
@@ -533,6 +541,10 @@ func _pose_hug(p):
 	var sway = deg2rad(4.0) * sin(p["t"] * 2.2) * p["w"]
 	_hug_one(p["pa"], p["pb"], dir, mid, gap, sa, sb, sway, p["w"], 1.0)
 	_hug_one(p["pb"], p["pa"], -dir, mid, gap, sb, sa, sway, p["w"], -1.0)
+	# little hearts rise over them now and then
+	if not p["ending"] and p["t"] >= p["next_hearts"]:
+		p["next_hearts"] = p["t"] + 1.6
+		_hearts(p["pa"], Vector3(mid.x, max(_head_y(p["pa"]), _head_y(p["pb"])) + 0.25 * max(sa, sb), mid.z))
 
 
 func _hug_one(me_node, other, dir, mid, gap, s_me, s_other, sway, w, tilt_side):
@@ -588,13 +600,88 @@ func _five_one(me_node, dir, mid, gap, s_me, contact, swing, bounce, w):
 	_reach(body, -1, target, right * 1.0 + Vector3.DOWN * 0.8, left, w)
 
 
+# A kiss: they stand close, lean in towards each other (the taller one leans down further) until their
+# faces meet in the middle, pucker up, and there's the game's kiss sound and a puff of hearts.
+func _pose_kiss(p):
+	var frame = _pair_frame(p)
+	var dir = frame[0]
+	var mid = frame[1]
+	var sa = _player_size(p["pa"])
+	var sb = _player_size(p["pb"])
+	var gap = 0.5 * (sa + sb) / 2.0           # far enough apart that they have to lean in
+	var meet_y = min(_head_y(p["pa"]), _head_y(p["pb"])) + 0.03 * min(sa, sb)
+	var lean = smoothstep(0.0, 0.5, p["t"])
+	_kiss_one(p["pa"], dir, mid, gap, sa, meet_y, lean, p["w"])
+	_kiss_one(p["pb"], -dir, mid, gap, sb, meet_y, lean, p["w"])
+	if p["t"] >= 0.55 and not p["slapped"]:
+		p["slapped"] = true
+		var at = Vector3(mid.x, meet_y, mid.z)
+		_play_sound(p["pa"], kiss_sound, at, 1.0, 0.0)
+		_hearts(p["pa"], at + Vector3.UP * 0.15 * min(sa, sb))
+		for node in [p["pa"], p["pb"]]:
+			if is_instance_valid(node) and node.has_method("_face_emote"):
+				node._face_emote("kiss")
+
+
+func _kiss_one(me_node, dir, mid, gap, s_me, meet_y, lean, w):
+	var body = _place_body(me_node, dir, mid, gap, 0.0, w)
+	if body == null:
+		return
+	var sk = body["sk"]
+	var torso = sk.find_bone("torso")
+	var head = sk.find_bone("head")
+	if torso < 0 or head < 0:
+		return
+	var g_torso = body["rebase"] * sk.get_bone_global_pose_no_override(torso)
+	var g_head = body["rebase"] * sk.get_bone_global_pose_no_override(head)
+	var axis_w = Vector3.UP.cross(dir).normalized()          # turning about this tips me forward
+	var axis = body["Winv"].basis.xform(axis_w).normalized()
+	# meet_y is about face height; the head bone sits a little below that
+	var want = body["Winv"].xform(Vector3(mid.x, meet_y - 0.3 * s_me, mid.z) - dir * 0.09 * s_me)
+	# how far to lean so my face gets to the meeting point
+	var best = 0.0
+	var best_cost = 1e9
+	for i in range(31):
+		var deg = -45.0 + i * 3.0
+		var h = g_torso.origin + (g_head.origin - g_torso.origin).rotated(axis, deg2rad(deg))
+		var cost = h.distance_to(want)
+		if cost < best_cost:
+			best_cost = cost
+			best = deg
+	var tip = Basis(axis, deg2rad(best * lean))
+	sk.set_bone_global_pose_override(torso, Transform(tip * g_torso.basis, g_torso.origin), w, true)
+
+
+func _head_y(player):
+	var sk = player.get_node_or_null(SKELETON_PATH)
+	if sk == null or sk.find_bone("head") < 0:
+		return player.global_transform.origin.y + 0.7 * _player_size(player)
+	return sk.global_transform.xform(sk.get_bone_global_pose_no_override(sk.find_bone("head")).origin).y + 0.25 * _player_size(player)
+
+
+# a puff of the game's own hearts at a spot in the world
+func _hearts(node, at):
+	if hearts_scene == null or not is_instance_valid(node):
+		return
+	var fx = hearts_scene.instance()
+	node.add_child(fx)
+	fx.set_as_toplevel(true)
+	fx.global_transform.origin = at
+	fx.emitting = true
+	get_tree().create_timer(fx.lifetime + 0.3).connect("timeout", fx, "queue_free")
+
+
 func _play_slap(node, at):
-	if slap_sound == null or not is_instance_valid(node):
+	_play_sound(node, slap_sound, at, 1.5, -2.0)
+
+
+func _play_sound(node, sound, at, pitch, db):
+	if sound == null or not is_instance_valid(node):
 		return
 	var player = AudioStreamPlayer3D.new()
-	player.stream = slap_sound
-	player.pitch_scale = 1.5
-	player.unit_db = -2.0
+	player.stream = sound
+	player.pitch_scale = pitch
+	player.unit_db = db
 	player.max_distance = 30.0
 	node.add_child(player)
 	player.global_transform.origin = at
@@ -647,7 +734,7 @@ func _clear_pose(h):
 		var sk = node.get_node_or_null(SKELETON_PATH)
 		if sk == null:
 			continue
-		for name in ["pelvis", "head", "arm.l", "elbow.l", "arm.r", "elbow.r"]:
+		for name in ["pelvis", "torso", "head", "arm.l", "elbow.l", "arm.r", "elbow.r"]:
 			var bone = sk.find_bone(name)
 			if bone >= 0:
 				sk.set_bone_global_pose_override(bone, Transform(), 0.0, true)

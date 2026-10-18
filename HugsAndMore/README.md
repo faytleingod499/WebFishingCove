@@ -1,16 +1,18 @@
 # Hugs and More
 
-Emotes for two players who both have the mod: **hug** and **high five**, with more to come.
+Emotes for two players who both have the mod: **hug**, **high five** and **kiss**, with more to come.
 
 Walk up to another player who has Hugs and More: a small **F  Interact** tag (in the Wolfpark HUD's glass
 style) floats above them. Press **F** to open a small menu and pick an emote. They get an invitation,
 "<name> wants a hug!", and join in with **Y** or the button (or "No thanks").
 
-- **Hug**: you turn to each other, step in and put your arms around each other, sway a little, and let go
+- **Hug**: you turn to each other, step in and put your arms around each other, sway a little with hearts floating up, and let go
   after a few seconds, or as soon as either of you walks away. A small player hugs a big one around the
   middle, a big one hugs a small one around the shoulders.
 - **High five**: you face each other an arm's length apart and slap your right hands together between you,
   no higher than the shorter one can reach.
+- **Kiss**: you lean in to each other (the taller one leans down further), pucker up, and the game's kiss
+  sound and a puff of its hearts play.
 
 Everyone else with the mod sees it too. Players without it see nothing unusual. Works on any server.
 

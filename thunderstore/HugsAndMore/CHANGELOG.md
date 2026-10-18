@@ -1,3 +1,7 @@
+## 1.2.0
+- New: **kiss**. You lean in to each other, pucker up, and the game's kiss sound and hearts play.
+- Hugs now have little hearts floating up over them too.
+
 ## 1.1.1
 - Fixed: other players sometimes never found out you have the mod (so no prompt appeared), when the
   announcement was sent while still joining the lobby. It is now checked and resent until it sticks.

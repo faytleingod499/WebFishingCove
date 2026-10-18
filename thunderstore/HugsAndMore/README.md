@@ -1,6 +1,6 @@
 # Hugs and More
 
-Emotes for two players who both have the mod: **hug** and **high five**, with more to come.
+Emotes for two players who both have the mod: **hug**, **high five** and **kiss**, with more to come.
 
 ## How to use it
 
@@ -11,9 +11,11 @@ Emotes for two players who both have the mod: **hug** and **high five**, with mo
 
 Nobody gets hugged or high-fived without saying yes.
 
-- **Hug**: you turn to each other, step in, wrap your arms around each other and sway a little. It ends
+- **Hug**: you turn to each other, step in, wrap your arms around each other and sway a little, with hearts floating up. It ends
   after a few seconds, or as soon as either of you walks away.
 - **High five**: you face each other, raise your right hands and slap them together.
+- **Kiss**: you lean in to each other (the taller one leans down), pucker up, and the game's kiss sound
+  and a puff of hearts play.
 
 Both fit any sizes: a small player hugs a big one around the middle, and a tall player reaches down for a
 small one's high five.
