@@ -6,13 +6,16 @@ extends Node
 # Your colours are shared through the Steam lobby, so other players who have this mod see your wolf
 # exactly as you made it. Players without the mod do not see pets at all. Works on any server.
 
-const VERSION = "1.5.1"
+const VERSION = "1.6.0"
 const CONFIG_PATH = "user://wolfpets.json"
 const MODEL_PATH = "res://mods/WolfPets/wolf_pet.scn"
 const SHADOW_PATH = "res://Scenes/Entities/Shadow/shadow.tscn"
 const SYNC_KEY = "wolfpet"
 const PAT_KEY = "wolfpat"   # "<wolf owner's steam id>;<count>" while petting, empty otherwise
 const AREA_SCRIPT = "res://mods/WolfPets/pet_area.gd"
+const HOWL_PATH = "res://mods/WolfPets/howl.wav"
+const WHINE_PATH = "res://Sounds/dog_whine.ogg"  # the game's own dog whine, pitched up a little
+const HOWL_TIME = 1.7
 const SKELETON_PATH = "body/player_body/Armature/Skeleton"
 const POPUP_ID = "WOLFPETS"
 const DEFAULT_PAW_POS = Vector2(16, 140)
@@ -74,6 +77,8 @@ var my_pat_seq = 0
 var pat_read_timer = 0.0
 var remote_pat_seen = {}
 var area_script = null
+var howl_sound = null
+var whine_sound = null
 
 # the paw button and the menu
 var layer
@@ -100,6 +105,9 @@ func _ready():
 	model_scene = load(MODEL_PATH)
 	if ResourceLoader.exists(AREA_SCRIPT):
 		area_script = load(AREA_SCRIPT)
+	howl_sound = _load_wav(HOWL_PATH)
+	if ResourceLoader.exists(WHINE_PATH):
+		whine_sound = load(WHINE_PATH)
 	if ResourceLoader.exists(SHADOW_PATH):
 		shadow_scene = load(SHADOW_PATH)
 	_reset_colors("Grey")
@@ -257,6 +265,7 @@ func _update_pets(delta, net):
 		if pet["pat"] == null:
 			_move_pet(pet, owner_node, delta)
 		_place_label(pet, wanted[key][4])
+		_listen_for_bark(pet, owner_node, delta)
 		# "Pet wolf" is offered while it stands or walks, not while it sits, lies down or is being petted
 		if pet["area"] != null and is_instance_valid(pet["area"]):
 			pet["area"].visible = pet["pat"] == null and pet["anim_name"] != "wolf_sit" and pet["anim_name"] != "wolf_lie"
@@ -318,9 +327,94 @@ func _make_pet(owner_node):
 	var pet = {"node": node, "model": model, "anim": anim, "mats": mats, "owner": owner_node,
 		"speed": 0.0, "still": 0.0, "anim_name": "", "sig": "", "moving": false, "sat": 0.0,
 		"area": area, "pat": null, "skeleton": model.find_node("Skeleton", true, false),
-		"scale": PET_SCALE, "size": 1.0, "side": 0, "label": _make_label()}
+		"scale": PET_SCALE, "size": 1.0, "side": 0, "label": _make_label(),
+		"voice": _make_voice(node), "barking": false, "howl_wait": -1.0, "howl_t": -1.0}
 	_play(pet, "wolf_idle", 1.0)
 	return pet
+
+
+# --- noises ---
+
+# a .wav packed with the mod, read straight into a sound the engine can play
+func _load_wav(path):
+	var file = File.new()
+	if file.open(path, File.READ) != OK:
+		return null
+	var bytes = file.get_buffer(file.get_len())
+	file.close()
+	if bytes.size() < 44:
+		return null
+	var rate = bytes[24] | (bytes[25] << 8) | (bytes[26] << 16) | (bytes[27] << 24)
+	var channels = bytes[22] | (bytes[23] << 8)
+	var i = 12
+	while i + 8 <= bytes.size():
+		var id = bytes.subarray(i, i + 3).get_string_from_ascii()
+		var size = bytes[i + 4] | (bytes[i + 5] << 8) | (bytes[i + 6] << 16) | (bytes[i + 7] << 24)
+		if id == "data":
+			var sample = AudioStreamSample.new()
+			sample.format = AudioStreamSample.FORMAT_16_BITS
+			sample.mix_rate = rate
+			sample.stereo = channels == 2
+			sample.data = bytes.subarray(i + 8, min(i + 8 + size, bytes.size()) - 1)
+			return sample
+		i += 8 + size + (size % 2)
+	return null
+
+
+# the wolf's voice, set up like the players' own barks
+func _make_voice(node):
+	var voice = AudioStreamPlayer3D.new()
+	voice.unit_db = 0.2
+	voice.unit_size = 2.2
+	voice.max_db = -12.0
+	voice.max_distance = 50.0
+	voice.attenuation_filter_cutoff_hz = 8000.0
+	voice.bus = "SFX"
+	voice.translation = Vector3(0, 0.9 * PET_SCALE, 0)
+	node.add_child(voice)
+	return voice
+
+
+# bigger wolves sound deeper, smaller ones higher
+func _say(pet, sound, pitch):
+	var voice = pet.get("voice")
+	if sound == null or voice == null or not is_instance_valid(voice):
+		return
+	voice.stream = sound
+	voice.pitch_scale = clamp(pitch / sqrt(pet["size"]), 0.6, 2.0)
+	voice.play()
+
+
+# when its owner barks (or meows) it answers with a short howl, nose to the sky
+func _listen_for_bark(pet, owner_node, delta):
+	var barking = false
+	for name in ["sound_manager/bark_dog", "sound_manager/bark_cat"]:
+		var player = owner_node.get_node_or_null(name)
+		if player != null and player.playing:
+			barking = true
+	if barking and not pet["barking"] and pet["howl_t"] < 0.0 and pet["howl_wait"] < 0.0:
+		pet["howl_wait"] = 0.35
+	pet["barking"] = barking
+	if pet["howl_wait"] >= 0.0:
+		pet["howl_wait"] -= delta
+		if pet["howl_wait"] < 0.0:
+			pet["howl_t"] = 0.0
+			_say(pet, howl_sound, 1.0)
+	if pet["howl_t"] >= 0.0:
+		pet["howl_t"] += delta
+		var ws = pet["skeleton"]
+		var neck = ws.find_bone("neck") if ws != null and is_instance_valid(ws) else -1
+		if pet["howl_t"] > HOWL_TIME or pet["pat"] != null:
+			pet["howl_t"] = -1.0
+			if neck >= 0 and pet["pat"] == null:
+				ws.set_bone_global_pose_override(neck, Transform(), 0.0, true)
+		elif neck >= 0:
+			# up quickly, held while it howls, then down again as the howl fades
+			var w = clamp(pet["howl_t"] / 0.25, 0.0, 1.0) * clamp((HOWL_TIME - pet["howl_t"]) / 0.4, 0.0, 1.0)
+			var fwd = _facing(pet["node"])
+			var axis = ws.global_transform.basis.inverse().xform(Vector3.UP.cross(fwd)).normalized()
+			var g = ws.get_bone_global_pose_no_override(neck)
+			ws.set_bone_global_pose_override(neck, Transform(Basis(axis, deg2rad(-40.0)) * g.basis, g.origin), w, true)
 
 
 func _make_label():
@@ -719,6 +813,7 @@ func _update_pats(delta):
 			if dist < 0.08 or pat["t"] > 4.0:
 				node.global_transform.origin = spot
 				pat["phase"] = "pet"
+				_say(pet, whine_sound, 1.2)
 				pat["t"] = 0.0
 			else:
 				var step = min(WALK_SPEED * delta, dist)

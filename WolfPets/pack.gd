@@ -14,5 +14,6 @@ func _init():
 	packer.add_file("res://mods/WolfPets/main.gd", src.plus_file("main.gd"))
 	packer.add_file("res://mods/WolfPets/wolf_pet.scn", src.plus_file("wolf_pet.scn"))
 	packer.add_file("res://mods/WolfPets/pet_area.gd", src.plus_file("pet_area.gd"))
+	packer.add_file("res://mods/WolfPets/howl.wav", src.plus_file("howl.wav"))
 	print("pack result: ", packer.flush(true))
 	quit()

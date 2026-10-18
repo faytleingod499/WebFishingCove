@@ -32,6 +32,10 @@ head. The pose fits your size: the wolf raises its head for a big player and low
 for a small one, and you lean forward, straighten up or reach up as needed. Moving or sitting stops
 it. Other players with the mod see the petting too.
 
+Petting makes it give a happy whine (the game's own dog whine, pitched up). When you bark or meow it
+answers with a short howl, nose to the sky. Bigger wolves sound deeper, smaller ones higher.
+`model/make_howl.py` makes the howl sound.
+
 When you sit down, your wolf walks to your side and lies down beside you, facing the same way.
 
 ## Building
