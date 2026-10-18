@@ -1,27 +1,24 @@
 extends Node
 
-# Wolf Pets
-# A little wolf that follows you around: it walks after you, waits next to you and sits down when
-# you stand still for a while. Click the paw button to show or hide it and to pick its colours.
-# Your colours are shared through the Steam lobby, so other players who have this mod see your wolf
-# exactly as you made it. Players without the mod do not see pets at all. Works on any server.
+# EtherPets
+# A little pet (a wolf or a cat) that follows you around: it walks after you, waits next to you and
+# sits down when you stand still for a while. Click the paw button (or press P) to choose your pet and
+# its colours. Your choices are shared through the Steam lobby, so other players who have this mod
+# see your pet exactly as you made it. Players without the mod do not see pets. Works on any server.
 
-const VERSION = "1.7.0"
-const CONFIG_PATH = "user://wolfpets.json"
-const MODEL_PATH = "res://mods/WolfPets/wolf_pet.scn"
+const VERSION = "2.0.0"
+const CONFIG_PATH = "user://etherpets.json"
+const OLD_CONFIG_PATH = "user://wolfpets.json" # from when it was Wolf Pets
 const SHADOW_PATH = "res://Scenes/Entities/Shadow/shadow.tscn"
-const SYNC_KEY = "wolfpet"
-const PAT_KEY = "wolfpat"   # "<wolf owner's steam id>;<count>" while petting, empty otherwise
-const AREA_SCRIPT = "res://mods/WolfPets/pet_area.gd"
-const HOWL_PATH = "res://mods/WolfPets/howl.wav"
-const WHINE_PATH = "res://Sounds/dog_whine.ogg"  # the game's own dog whine, pitched up a little
-const HOWL_TIME = 2.0
-const HOWL_COOLDOWN_MS = 120000  # a howl at most every 2 minutes
+const SYNC_KEY = "etherpet"
+const PAT_KEY = "etherpat"  # "<pet owner's steam id>;<count>" while petting, empty otherwise
+const AREA_SCRIPT = "res://mods/EtherPets/pet_area.gd"
+const HOWL_COOLDOWN_MS = 120000  # it answers a bark at most every 2 minutes
 const SKELETON_PATH = "body/player_body/Armature/Skeleton"
-const POPUP_ID = "WOLFPETS"
+const POPUP_ID = "ETHERPETS"
 const DEFAULT_PAW_POS = Vector2(16, 140)
 
-const PET_SCALE = 0.82    # about 60% of a player's height, at size 100%
+const PET_SCALE = 0.82    # a wolf at size 100%, about 60% of a player's height (see SPECIES for others)
 const SIZE_MIN = 0.5
 const SIZE_MAX = 1.5
 const FOLLOW_NEAR = 2.1    # stops when this close to its owner
@@ -36,28 +33,54 @@ const SIT_AFTER = 5.0      # seconds of standing still before it sits down
 
 # the parts that can be coloured: key, label, the model's material for it
 const PARTS = [
-	["fur", "Fur", "wolf_fur"],
-	["back", "Back", "wolf_dark"],
-	["belly", "Belly & paws", "wolf_light"],
-	["eyes", "Eyes", "wolf_eye"],
-	["nose", "Nose & mouth", "wolf_black"],
-	["ears", "Ears & tongue", "wolf_ear_inner"],
+	["fur", "Fur", "pet_fur"],
+	["back", "Back", "pet_dark"],
+	["belly", "Belly & paws", "pet_light"],
+	["eyes", "Eyes", "pet_eye"],
+	["nose", "Nose & mouth", "pet_black"],
+	["ears", "Ears & tongue", "pet_ear_inner"],
 ]
-const PRESETS = {
-	"Grey": {"fur": "aaadb8", "back": "797c89", "belly": "e7eaed", "eyes": "303038", "nose": "303038", "ears": "e7bfc8"},
-	"White": {"fur": "eff0f2", "back": "d4d8df", "belly": "fcfcfa", "eyes": "303038", "nose": "303038", "ears": "e7bfc8"},
-	"Black": {"fur": "4d4d55", "back": "2c2c30", "belly": "95979e", "eyes": "e8a23a", "nose": "1c1c20", "ears": "e7bfc8"},
+
+# every kind of pet: its model, how big it is, its noises, and its ready-made looks.
+# All of them share one skeleton and one set of animations, so the rest of the mod works for each.
+const SPECIES_ORDER = ["wolf", "cat"]
+const SPECIES = {
+	"wolf": {
+		"label": "Wolf", "model": "res://mods/EtherPets/wolf.scn", "scale": 0.82,
+		"pet_sound": "res://Sounds/dog_whine.ogg", "pet_pitch": 1.2,       # a happy whine
+		"call_sound": "res://mods/EtherPets/howl.wav", "call_pitch": 1.0, # a short howl
+		"call_time": 2.0, "call_lift": 40.0,                               # nose to the sky
+		"presets": [
+			["Grey", {"fur": "aaadb8", "back": "797c89", "belly": "e7eaed", "eyes": "303038", "nose": "303038", "ears": "e7bfc8"}],
+			["White", {"fur": "eff0f2", "back": "d4d8df", "belly": "fcfcfa", "eyes": "303038", "nose": "303038", "ears": "e7bfc8"}],
+			["Black", {"fur": "4d4d55", "back": "2c2c30", "belly": "95979e", "eyes": "e8a23a", "nose": "1c1c20", "ears": "e7bfc8"}],
+		],
+	},
+	"cat": {
+		"label": "Cat", "model": "res://mods/EtherPets/cat.scn", "scale": 0.55,
+		"pet_sound": "res://Sounds/cat_purr.ogg", "pet_pitch": 1.0,       # a purr
+		"call_sound": "res://Sounds/cat_meow.ogg", "call_pitch": 1.1,     # a meow back
+		"call_time": 0.9, "call_lift": 18.0,
+		"presets": [
+			["Ginger", {"fur": "e8a25a", "back": "c47a35", "belly": "fbe9d6", "eyes": "6fae4a", "nose": "e79aa8", "ears": "f0b8c0"}],
+			["Grey", {"fur": "a9adb5", "back": "7c808b", "belly": "eef0f2", "eyes": "d9b84a", "nose": "e79aa8", "ears": "f0b8c0"}],
+			["Black", {"fur": "3a3a40", "back": "25252a", "belly": "5c5c64", "eyes": "e8c23a", "nose": "2a2a30", "ears": "d9a0a8"}],
+		],
+	},
 }
-const PRESET_ORDER = ["Grey", "White", "Black"]
 
 var steam = null
-var model_scene = null
+var scenes = {}  # species -> its model scene
+var sounds = {}  # path -> loaded sound
 var shadow_scene = null
 
 # my pet
 var show_pet = true
+var species = "wolf"
+var species_buttons = {}
+var preset_row
 var pet_size = 1.0 # times the normal size
-var howl_on = true # answers its owner's bark with a howl
+var howl_on = true # answers its owner's bark (a wolf howls, a cat meows)
 var howl_box
 var pet_name = ""  # the name of the palette it wears, shown above it
 var name_layer
@@ -80,8 +103,6 @@ var my_pat_seq = 0
 var pat_read_timer = 0.0
 var remote_pat_seen = {}
 var area_script = null
-var howl_sound = null
-var whine_sound = null
 
 # the paw button and the menu
 var layer
@@ -105,15 +126,19 @@ var theme_applied = false
 func _ready():
 	if Engine.has_singleton("Steam"):
 		steam = Engine.get_singleton("Steam")
-	model_scene = load(MODEL_PATH)
+	for key in SPECIES_ORDER:
+		var info = SPECIES[key]
+		if ResourceLoader.exists(info["model"]):
+			scenes[key] = load(info["model"])
+		for which in ["pet_sound", "call_sound"]:
+			var path = info[which]
+			if not sounds.has(path):
+				sounds[path] = _load_wav(path) if path.ends_with(".wav") else (load(path) if ResourceLoader.exists(path) else null)
 	if ResourceLoader.exists(AREA_SCRIPT):
 		area_script = load(AREA_SCRIPT)
-	howl_sound = _load_wav(HOWL_PATH)
-	if ResourceLoader.exists(WHINE_PATH):
-		whine_sound = load(WHINE_PATH)
 	if ResourceLoader.exists(SHADOW_PATH):
 		shadow_scene = load(SHADOW_PATH)
-	_reset_colors("Grey")
+	_reset_colors(0)
 	_build_ui()
 	_load_config()
 	_rebuild_palettes()
@@ -130,25 +155,35 @@ func _exit_tree():
 
 # --- colours ---
 
+# preset: its number in the current kind's list, or its name
 func _reset_colors(preset):
+	var list = SPECIES[species]["presets"]
+	var index = 0
+	if typeof(preset) == TYPE_STRING:
+		for i in range(list.size()):
+			if list[i][0] == preset:
+				index = i
+	else:
+		index = clamp(int(preset), 0, list.size() - 1)
 	colors = {}
 	for part in PARTS:
-		colors[part[0]] = PRESETS[preset][part[0]]
+		colors[part[0]] = list[index][1][part[0]]
 
 
 func _color_of(cfg_colors, key):
 	var text = str(cfg_colors.get(key, ""))
 	if not text.is_valid_html_color():
-		text = PRESETS["Grey"][key]
+		text = SPECIES["wolf"]["presets"][0][1][key]
 	return Color(text)
 
 
-# what goes into the lobby: "1;1;fur,back,belly,eyes,nose,ears;1.00" (format, shown, colours, size)
+# what goes into the lobby: "1;1;fur,back,belly,eyes,nose,ears;1.00;Name;1;wolf"
+# (format, shown, colours, size, name, answers barks, species)
 func _sync_text():
 	var list = []
 	for part in PARTS:
 		list.append(str(colors[part[0]]))
-	return "1;" + ("1" if show_pet else "0") + ";" + PoolStringArray(list).join(",") + ";" + ("%.2f" % pet_size) + ";" + _clean_name(pet_name) + ";" + ("1" if howl_on else "0")
+	return "1;" + ("1" if show_pet else "0") + ";" + PoolStringArray(list).join(",") + ";" + ("%.2f" % pet_size) + ";" + _clean_name(pet_name) + ";" + ("1" if howl_on else "0") + ";" + species
 
 
 # names travel inside the lobby text, so they lose the separators and stay short
@@ -168,6 +203,7 @@ func _parse_sync(text):
 	cfg["size"] = clamp(float(bits[3]), SIZE_MIN, SIZE_MAX) if bits.size() > 3 and bits[3].is_valid_float() else 1.0
 	cfg["name"] = _clean_name(bits[4]) if bits.size() > 4 else ""
 	cfg["howl"] = bits[5] != "0" if bits.size() > 5 else true
+	cfg["species"] = bits[6] if bits.size() > 6 and SPECIES.has(bits[6]) else "wolf"
 	return cfg
 
 
@@ -197,7 +233,7 @@ func _process(delta):
 		read_timer = 0.0
 		_read_remote(lobby)
 
-	# someone else starting or stopping to pet a wolf is read more often, so it starts quickly
+	# someone else starting or stopping to pet a pet is read more often, so it starts quickly
 	pat_read_timer += delta
 	if pat_read_timer >= 0.2:
 		pat_read_timer = 0.0
@@ -235,26 +271,26 @@ func _update_pets(delta, net):
 		if not _is_real_player(player):
 			continue
 		if player.get("controlled") == true:
-			wanted["me"] = [player, show_pet, colors, pet_size, pet_name, howl_on]
+			wanted["me"] = [player, show_pet, colors, pet_size, pet_name, howl_on, species]
 		else:
 			var id = player.get("owner_id")
 			if remote_cfg.has(id) and remote_cfg[id]["show"]:
-				wanted[id] = [player, true, remote_cfg[id]["colors"], remote_cfg[id]["size"], remote_cfg[id]["name"], remote_cfg[id]["howl"]]
+				wanted[id] = [player, true, remote_cfg[id]["colors"], remote_cfg[id]["size"], remote_cfg[id]["name"], remote_cfg[id]["howl"], remote_cfg[id]["species"]]
 
 	for key in pets.keys():
 		var pet = pets[key]
+		# gone, hidden, or turned into another kind of pet: it is made again
 		if not wanted.has(key) or not wanted[key][1] or not is_instance_valid(pet["node"]) \
-				or not is_instance_valid(pet["owner"]) or pet["owner"] != wanted[key][0]:
+				or not is_instance_valid(pet["owner"]) or pet["owner"] != wanted[key][0] \
+				or pet["species"] != wanted[key][6]:
 			_remove_pet(key)
 
-	if model_scene == null:
-		return
 	for key in wanted.keys():
 		var owner_node = wanted[key][0]
-		if not wanted[key][1]:
+		if not wanted[key][1] or not scenes.has(wanted[key][6]):
 			continue
 		if not pets.has(key):
-			var pet = _make_pet(owner_node)
+			var pet = _make_pet(owner_node, wanted[key][6])
 			if pet == null:
 				continue
 			pets[key] = pet
@@ -271,22 +307,24 @@ func _update_pets(delta, net):
 		_place_label(pet, wanted[key][4])
 		pet["howl_on"] = wanted[key][5]
 		_listen_for_bark(pet, owner_node, delta)
-		# "Pet wolf" is offered while it stands or walks, not while it sits, lies down or is being petted
+		# "Pet <name>" is offered while it stands or walks, not while it sits, lies down or is being petted
 		if pet["area"] != null and is_instance_valid(pet["area"]):
-			pet["area"].visible = pet["pat"] == null and pet["anim_name"] != "wolf_sit" and pet["anim_name"] != "wolf_lie"
+			var name = str(wanted[key][4])
+			pet["area"].text = "Pet " + (name if name != "" else SPECIES[pet["species"]]["label"].to_lower())
+			pet["area"].visible = pet["pat"] == null and pet["lap"] == "" and not pet["anim_name"] in ["wolf_sit", "wolf_lie", "cat_curl"]
 
 
 # --- making a pet ---
 
-func _make_pet(owner_node):
+func _make_pet(owner_node, kind):
 	var parent = owner_node.get_parent()
 	if parent == null:
 		return null
 	var node = Spatial.new()
-	node.name = "WolfPet"
+	node.name = "EtherPet"
 	parent.add_child(node)
 
-	var model = model_scene.instance()
+	var model = scenes[kind].instance()
 	model.rotation_degrees = Vector3(0, 180, 0) # the model looks along +Z, Godot's forward is -Z
 	model.scale = Vector3.ONE * PET_SCALE
 	node.add_child(model)
@@ -295,7 +333,7 @@ func _make_pet(owner_node):
 		var shadow = shadow_scene.instance()
 		node.add_child(shadow)
 
-	# the spot the game's interact key finds, so walking up to a wolf offers "Pet wolf"
+	# the spot the game's interact key finds, so walking up to a pet offers "Pet <name>"
 	var area = null
 	if area_script != null:
 		area = Area.new()
@@ -314,7 +352,7 @@ func _make_pet(owner_node):
 	var meshes = []
 	_collect_meshes(model, meshes)
 
-	# each pet gets its own materials so everyone's wolf can have different colours
+	# each pet gets its own materials so everyone's pet can have different colours
 	var mats = {}
 	for mi in meshes:
 		for i in range(mi.mesh.get_surface_count()):
@@ -332,7 +370,7 @@ func _make_pet(owner_node):
 	var pet = {"node": node, "model": model, "anim": anim, "mats": mats, "owner": owner_node,
 		"speed": 0.0, "still": 0.0, "anim_name": "", "sig": "", "moving": false, "sat": 0.0,
 		"area": area, "pat": null, "skeleton": model.find_node("Skeleton", true, false),
-		"scale": PET_SCALE, "size": 1.0, "side": 0, "label": _make_label(),
+		"scale": PET_SCALE, "size": 1.0, "side": 0, "label": _make_label(), "species": kind, "lap": "", "hop_t": 0.0, "hop_from": Vector3(),
 		"voice": _make_voice(node), "barking": false, "howl_wait": -1.0, "howl_t": -1.0,
 		"howl_on": true, "howl_ready_at": 0}
 	_play(pet, "wolf_idle", 1.0)
@@ -367,7 +405,7 @@ func _load_wav(path):
 	return null
 
 
-# the wolf's voice, set up like the players' own barks
+# the pet's voice, set up like the players' own barks
 func _make_voice(node):
 	var voice = AudioStreamPlayer3D.new()
 	voice.unit_db = 0.2
@@ -408,22 +446,24 @@ func _listen_for_bark(pet, owner_node, delta):
 		pet["howl_wait"] -= delta
 		if pet["howl_wait"] < 0.0:
 			pet["howl_t"] = 0.0
-			_say(pet, howl_sound, 1.0)
+			var info = SPECIES[pet["species"]]
+			_say(pet, sounds.get(info["call_sound"]), info["call_pitch"])
 	if pet["howl_t"] >= 0.0:
 		pet["howl_t"] += delta
 		var ws = pet["skeleton"]
 		var neck = ws.find_bone("neck") if ws != null and is_instance_valid(ws) else -1
-		if pet["howl_t"] > HOWL_TIME or pet["pat"] != null:
+		var call_time = SPECIES[pet["species"]]["call_time"]
+		if pet["howl_t"] > call_time or pet["pat"] != null:
 			pet["howl_t"] = -1.0
 			if neck >= 0 and pet["pat"] == null:
 				ws.set_bone_global_pose_override(neck, Transform(), 0.0, true)
 		elif neck >= 0:
 			# up quickly, held while it howls, then down again as the howl fades
-			var w = clamp(pet["howl_t"] / 0.25, 0.0, 1.0) * clamp((HOWL_TIME - pet["howl_t"]) / 0.4, 0.0, 1.0)
+			var w = clamp(pet["howl_t"] / 0.25, 0.0, 1.0) * clamp((call_time - pet["howl_t"]) / 0.4, 0.0, 1.0)
 			var fwd = _facing(pet["node"])
 			var axis = ws.global_transform.basis.inverse().xform(Vector3.UP.cross(fwd)).normalized()
 			var g = ws.get_bone_global_pose_no_override(neck)
-			ws.set_bone_global_pose_override(neck, Transform(Basis(axis, deg2rad(-40.0)) * g.basis, g.origin), w, true)
+			ws.set_bone_global_pose_override(neck, Transform(Basis(axis, deg2rad(-SPECIES[pet["species"]]["call_lift"])) * g.basis, g.origin), w, true)
 
 
 func _make_label():
@@ -479,7 +519,7 @@ func _place_label(pet, name):
 func _apply_size(pet, size):
 	size = clamp(float(size), SIZE_MIN, SIZE_MAX)
 	pet["size"] = size
-	pet["scale"] = PET_SCALE * size
+	pet["scale"] = SPECIES[pet["species"]]["scale"] * size
 	pet["model"].scale = Vector3.ONE * pet["scale"]
 	var area = pet["area"]
 	if area != null and is_instance_valid(area) and area.has_meta("shape"):
@@ -557,9 +597,17 @@ func _move_pet(pet, owner_node, delta):
 	# walk when it fell behind, stop again once it is close; it hurries when far away
 	# when its owner sits down it comes to lie beside them
 	if _is_sitting(owner_node):
-		_lie_beside(pet, owner_node, delta)
+		if pet["species"] == "cat":
+			_curl_in_lap(pet, owner_node, delta)
+		else:
+			_lie_beside(pet, owner_node, delta)
 		return
 	pet["side"] = 0
+	# its owner stood up while it was in their lap: it hops down first
+	if pet["lap"] != "" and pet["lap"] != "go":
+		_hop_down(pet, owner_node, delta)
+		return
+	pet["lap"] = ""
 
 	if dist > _far(pet):
 		pet["moving"] = true
@@ -580,7 +628,7 @@ func _move_pet(pet, owner_node, delta):
 
 	# turn to where it walks, or to its owner while standing; once it sits or lies down it stays
 	# put until it gets up to follow, so its owner can sit right beside it
-	var settled = pet["anim_name"] == "wolf_sit" or pet["anim_name"] == "wolf_lie"
+	var settled = pet["anim_name"] in ["wolf_sit", "wolf_lie", "cat_curl"]
 	if dist > 0.05 and (pet["speed"] > 0.3 or not settled):
 		var yaw = atan2(-dir.x, -dir.z)
 		node.rotation.y = lerp_angle(node.rotation.y, yaw, clamp(delta * (8.0 if pet["speed"] > 0.3 else 3.0), 0.0, 1.0))
@@ -639,6 +687,93 @@ func _stride_rate(speed):
 	return min(4.0 + (speed - RUN_SPEED) * 0.15, 9.0)
 
 
+# --- a cat in its owner's lap ---
+
+const LAP_HOP_TIME = 0.45
+const CURL_CENTRE = Vector3(-0.253, 0, -0.128) # middle of the curled-up cat, from its origin, at size 1
+
+
+# the top of a sitting player's thighs, from their skeleton, whatever their size
+func _lap_point(owner_node):
+	var size = _player_size(owner_node)
+	var sk = owner_node.get_node_or_null(SKELETON_PATH)
+	if sk != null:
+		var pts = []
+		for name in ["leg.l", "foot.l", "leg.r", "foot.r"]:
+			var b = sk.find_bone(name)
+			if b >= 0:
+				pts.append(sk.global_transform.xform(sk.get_bone_global_pose(b).origin))
+		if pts.size() == 4:
+			var mid = (pts[0] + pts[1] + pts[2] + pts[3]) / 4.0
+			return mid + Vector3.UP * 0.07 * size
+	return owner_node.global_transform.origin + _facing(owner_node) * 0.25 * size + Vector3.UP * (0.35 * size - owner_node.global_transform.basis.y.length())
+
+
+# where the cat's origin goes so the middle of its curl sits on the lap, lying across it
+func _lap_spot(pet, owner_node):
+	var yaw = atan2(-_facing(owner_node).x, -_facing(owner_node).z) + PI / 2.0
+	var basis = Basis(Vector3.UP, yaw)
+	return [_lap_point(owner_node) - basis.xform(CURL_CENTRE * pet["scale"]), yaw]
+
+
+# walks up to its sitting owner, hops into their lap and curls up there
+func _curl_in_lap(pet, owner_node, delta):
+	var node = pet["node"]
+	if pet["lap"] == "" or pet["lap"] == "down":
+		pet["lap"] = "go"
+	if pet["lap"] == "go":
+		var here = owner_node.global_transform.origin
+		var size = _player_size(owner_node)
+		var spot = here + _facing(owner_node) * (0.45 * size + 0.5 * pet["scale"])
+		var pos = node.global_transform.origin
+		var to = Vector3(spot.x - pos.x, 0, spot.z - pos.z)
+		var dist = to.length()
+		if dist > 0.1:
+			pet["speed"] = lerp(pet["speed"], clamp(dist * 3.0, 1.2, WALK_SPEED), clamp(delta * 6.0, 0.0, 1.0))
+			pos += to / dist * min(pet["speed"] * delta, dist)
+			node.global_transform.origin = _ground(node, pos, _feet_y(owner_node), pos.y, delta)
+			node.rotation.y = lerp_angle(node.rotation.y, atan2(-to.x, -to.z), clamp(delta * 10.0, 0.0, 1.0))
+			_play(pet, "wolf_walk", _stride_rate(pet["speed"]))
+			return
+		pet["speed"] = 0.0
+		pet["lap"] = "hop"
+		pet["hop_t"] = 0.0
+		pet["hop_from"] = node.global_transform.origin
+	var target = _lap_spot(pet, owner_node)
+	if pet["lap"] == "hop":
+		pet["hop_t"] += delta
+		var k = clamp(pet["hop_t"] / LAP_HOP_TIME, 0.0, 1.0)
+		var arc = sin(k * PI) * (0.25 * pet["scale"] + 0.15)
+		node.global_transform.origin = pet["hop_from"].linear_interpolate(target[0], k) + Vector3.UP * arc
+		node.rotation.y = lerp_angle(node.rotation.y, target[1], k)
+		_play(pet, "wolf_sit", 1.0)
+		if k >= 1.0:
+			pet["lap"] = "in"
+		return
+	# curled up, staying with the lap as its owner moves about in their seat
+	node.global_transform.origin = target[0]
+	node.rotation.y = lerp_angle(node.rotation.y, target[1], clamp(delta * 8.0, 0.0, 1.0))
+	_play(pet, "cat_curl", 1.0)
+
+
+func _hop_down(pet, owner_node, delta):
+	var node = pet["node"]
+	if pet["lap"] != "down":
+		pet["lap"] = "down"
+		pet["hop_t"] = 0.0
+		pet["hop_from"] = node.global_transform.origin
+	var size = _player_size(owner_node)
+	var spot = owner_node.global_transform.origin + _facing(owner_node) * (0.45 * size + 0.5 * pet["scale"])
+	spot = _ground(node, spot, _feet_y(owner_node))
+	pet["hop_t"] += delta
+	var k = clamp(pet["hop_t"] / LAP_HOP_TIME, 0.0, 1.0)
+	node.global_transform.origin = pet["hop_from"].linear_interpolate(spot, k) + Vector3.UP * sin(k * PI) * 0.2
+	_play(pet, "wolf_idle", 1.0)
+	if k >= 1.0:
+		pet["lap"] = ""
+		pet["still"] = 0.0
+
+
 func _is_sitting(player):
 	var data = player.get("animation_data")
 	if typeof(data) == TYPE_DICTIONARY and data.get("sitting") == true:
@@ -690,7 +825,7 @@ func _play(pet, name, rate):
 
 # --- petting ---
 
-# the game's interact key on a wolf
+# the game's interact key on a pet
 func _on_pet_activated(pet_key, actor):
 	if actor == null or actor.get("controlled") != true or pats.has("me") or not pets.has(pet_key):
 		return
@@ -810,7 +945,7 @@ func _update_pats(delta):
 		var size = _player_size(petter)
 		var fwd = _facing(petter)
 		var node = pet["node"]
-		# the wolf stands right in front of the player, facing them, its head within reach
+		# the pet stands right in front of the player, facing them, its head within reach
 		var spot = here + fwd * (0.37 * size + pat["head_off"])
 		spot = _ground(node, spot, _feet_y(petter))
 		var face_yaw = atan2(fwd.x, fwd.z) # looking back at the player
@@ -822,7 +957,8 @@ func _update_pats(delta):
 			if dist < 0.08 or pat["t"] > 4.0:
 				node.global_transform.origin = spot
 				pat["phase"] = "pet"
-				_say(pet, whine_sound, 1.2)
+				var info = SPECIES[pet["species"]]
+				_say(pet, sounds.get(info["pet_sound"]), info["pet_pitch"])
 				pat["t"] = 0.0
 			else:
 				var step = min(WALK_SPEED * delta, dist)
@@ -848,7 +984,7 @@ func _update_pats(delta):
 		_pose_pat(pat, pet, petter, size)
 
 
-# the size-aware part: the wolf lifts or lowers its head toward the player's hand height, and the
+# the size-aware part: the pet lifts or lowers its head toward the player's hand height, and the
 # player leans forward (or straightens up, or reaches up when small) until their hand meets its head
 func _pose_pat(pat, pet, petter, size):
 	var w = clamp(pat["w"], 0.0, 1.0)
@@ -867,14 +1003,14 @@ func _pose_pat(pat, pet, petter, size):
 	var W = sk.global_transform
 	var shoulder_w = W.xform(sk.get_bone_global_pose_no_override(arm).origin)
 
-	# the wolf's head: tip it down for a small player, up for a big one
+	# the pet's head: tip it down for a small player, up for a big one
 	var WW = ws.global_transform
-	var wolf_fwd = _facing(pet["node"])
-	var wolf_axis = Vector3.UP.cross(wolf_fwd).normalized() # turning about this moves the head down
+	var pet_fwd = _facing(pet["node"])
+	var pet_axis = Vector3.UP.cross(pet_fwd).normalized() # turning about this moves the head down
 	var g_neck = ws.get_bone_global_pose_no_override(neck)
 	var pivot = WW.xform(g_neck.origin)
 	var ps = pet["scale"]
-	var forehead = WW.xform(ws.get_bone_global_pose_no_override(head).origin) + wolf_fwd * 0.14 * ps + Vector3.UP * 0.27 * ps
+	var forehead = WW.xform(ws.get_bone_global_pose_no_override(head).origin) + pet_fwd * 0.14 * ps + Vector3.UP * 0.27 * ps
 	var want_y = shoulder_w.y - 0.05 * size
 	if want_y < 0.55 * ps / 0.82:
 		pat["low"] = true
@@ -882,22 +1018,22 @@ func _pose_pat(pat, pet, petter, size):
 	var best_cost = 1e9
 	for i in range(31):
 		var deg = -25.0 + i * 2.5
-		var y = pivot.y + (forehead - pivot).rotated(wolf_axis, deg2rad(deg)).y
+		var y = pivot.y + (forehead - pivot).rotated(pet_axis, deg2rad(deg)).y
 		var cost = abs(y - want_y) + 0.0005 * abs(deg)
 		if cost < best_cost:
 			best_cost = cost
 			best = deg
 	pat["neck"] = lerp(pat["neck"], best, 0.15)
 	var neck_rad = deg2rad(pat["neck"])
-	var wolf_axis_s = WW.basis.inverse().xform(wolf_axis).normalized()
-	ws.set_bone_global_pose_override(neck, Transform(Basis(wolf_axis_s, neck_rad) * g_neck.basis, g_neck.origin), w, true)
+	var pet_axis_s = WW.basis.inverse().xform(pet_axis).normalized()
+	ws.set_bone_global_pose_override(neck, Transform(Basis(pet_axis_s, neck_rad) * g_neck.basis, g_neck.origin), w, true)
 
 	# where the hand goes: the top of the head, stroking back and forth along it
 	var stroke = sin(pat["t"] * TAU * 1.3)
-	var target_w = pivot + (forehead - pivot).rotated(wolf_axis, neck_rad)
-	target_w += -wolf_fwd * (0.06 * ps * stroke) + Vector3.UP * (0.02 * ps * abs(stroke))
+	var target_w = pivot + (forehead - pivot).rotated(pet_axis, neck_rad)
+	target_w += -pet_fwd * (0.06 * ps * stroke) + Vector3.UP * (0.02 * ps * abs(stroke))
 	pat["target_w"] = target_w
-	var head_point = pivot + (forehead - pivot).rotated(wolf_axis, neck_rad)
+	var head_point = pivot + (forehead - pivot).rotated(pet_axis, neck_rad)
 	var node_pos = pet["node"].global_transform.origin
 	pat["head_off"] = lerp(pat["head_off"], Vector2(head_point.x - node_pos.x, head_point.z - node_pos.z).length(), 0.1)
 	var target = W.affine_inverse().xform(target_w)
@@ -992,8 +1128,24 @@ func _build_ui():
 	_glass_button(close)
 	head.add_child(close)
 
+	# which pet: a button with a little face for each kind
+	var species_row = HBoxContainer.new()
+	species_row.add_constant_override("separation", 6)
+	species_row.alignment = BoxContainer.ALIGN_CENTER
+	column.add_child(species_row)
+	for kind in SPECIES_ORDER:
+		var b = Button.new()
+		b.rect_min_size = Vector2(46, 40)
+		b.focus_mode = Control.FOCUS_NONE
+		b.connect("pressed", self, "_on_species", [kind])
+		b.connect("draw", self, "_draw_face", [b, kind])
+		species_row.add_child(b)
+		_add_tooltip(b, SPECIES[kind]["label"], "Make your pet a " + SPECIES[kind]["label"].to_lower())
+		species_buttons[kind] = b
+	_style_species_buttons()
+
 	show_box = CheckBox.new()
-	show_box.text = "Show my wolf"
+	show_box.text = "Show my pet"
 	show_box.focus_mode = Control.FOCUS_NONE
 	show_box.add_color_override("font_color", Color(1, 1, 1))
 	show_box.add_color_override("font_color_hover", Color(1, 1, 1))
@@ -1002,13 +1154,13 @@ func _build_ui():
 	column.add_child(show_box)
 
 	howl_box = CheckBox.new()
-	howl_box.text = "Howl when I bark"
+	howl_box.text = "Answer when I bark"
 	howl_box.focus_mode = Control.FOCUS_NONE
 	howl_box.add_color_override("font_color", Color(1, 1, 1))
 	howl_box.add_color_override("font_color_hover", Color(1, 1, 1))
 	howl_box.add_color_override("font_color_pressed", Color(1, 1, 1))
 	howl_box.connect("toggled", self, "_on_howl_toggled")
-	_add_tooltip(howl_box, "Howl", "Your wolf howls back when you bark or meow, at most once every 2 minutes")
+	_add_tooltip(howl_box, "Answer", "Your pet answers when you bark or meow (a wolf howls, a cat meows), at most once every 2 minutes")
 	column.add_child(howl_box)
 
 	var size_row = HBoxContainer.new()
@@ -1035,17 +1187,10 @@ func _build_ui():
 	size_label.add_color_override("font_color", Color(1, 1, 1))
 	size_row.add_child(size_label)
 
-	var preset_row = HBoxContainer.new()
+	preset_row = HBoxContainer.new()
 	preset_row.add_constant_override("separation", 6)
 	column.add_child(preset_row)
-	for name in PRESET_ORDER:
-		var b = Button.new()
-		b.text = name
-		b.focus_mode = Control.FOCUS_NONE
-		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		b.connect("pressed", self, "_on_preset", [name])
-		_glass_button(b)
-		preset_row.add_child(b)
+	_rebuild_presets()
 
 	var grid = GridContainer.new()
 	grid.columns = 2
@@ -1248,6 +1393,92 @@ func _set_pet_name(name):
 	sync_dirty = true
 
 
+# the ready-made looks of the current kind of pet
+func _rebuild_presets():
+	if preset_row == null:
+		return
+	for child in preset_row.get_children():
+		preset_row.remove_child(child)
+		child.queue_free()
+	var list = SPECIES[species]["presets"]
+	for i in range(list.size()):
+		var b = Button.new()
+		b.text = list[i][0]
+		b.focus_mode = Control.FOCUS_NONE
+		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		b.connect("pressed", self, "_on_preset", [i])
+		_glass_button(b)
+		preset_row.add_child(b)
+
+
+func _style_species_buttons():
+	for kind in species_buttons.keys():
+		var b = species_buttons[kind]
+		var chosen = kind == species
+		var edge = Color(0.8, 1.0, 1.0, 0.95) if chosen else Color(0.55, 1.0, 1.0, 0.45)
+		var fill = Color(0.3, 1.0, 1.0, 0.42) if chosen else Color(0.2, 0.9, 0.95, 0.12)
+		b.add_stylebox_override("normal", _glass(fill, edge, 8, 0))
+		b.add_stylebox_override("hover", _glass(Color(0.3, 1.0, 1.0, 0.5 if chosen else 0.28), Color(0.8, 1.0, 1.0, 0.9), 8, 0))
+		b.add_stylebox_override("pressed", _glass(Color(0.3, 1.0, 1.0, 0.5), Color(0.8, 1.0, 1.0, 0.95), 8, 0))
+		b.add_stylebox_override("focus", StyleBoxEmpty.new())
+		b.update()
+
+
+# little drawn faces, so they do not depend on any font or picture
+func _draw_face(b, kind):
+	var c = b.rect_size / 2.0 + Vector2(0, 2)
+	var fur = Color(0.96, 0.97, 0.98)
+	var dark = Color(0.13, 0.16, 0.2)
+	var pink = Color(0.95, 0.62, 0.7)
+	if kind == "wolf":
+		for sx in [-1, 1]:
+			b.draw_colored_polygon(PoolVector2Array([c + Vector2(sx * 12, -5), c + Vector2(sx * 10, -17), c + Vector2(sx * 3, -9)]), fur)
+			b.draw_colored_polygon(PoolVector2Array([c + Vector2(sx * 10, -7), c + Vector2(sx * 9.5, -14), c + Vector2(sx * 5, -9)]), pink)
+		b.draw_colored_polygon(PoolVector2Array([c + Vector2(-12, -6), c + Vector2(-8, -10), c + Vector2(0, -11), c + Vector2(8, -10),
+			c + Vector2(12, -6), c + Vector2(11, 2), c + Vector2(6, 7), c + Vector2(3, 13), c + Vector2(-3, 13), c + Vector2(-6, 7), c + Vector2(-11, 2)]), fur)
+		b.draw_circle(c + Vector2(-5, -3), 1.7, dark)
+		b.draw_circle(c + Vector2(5, -3), 1.7, dark)
+		b.draw_circle(c + Vector2(0, 10.5), 2.2, dark)
+	else:
+		for sx in [-1, 1]:
+			b.draw_colored_polygon(PoolVector2Array([c + Vector2(sx * 12, -2), c + Vector2(sx * 11, -15), c + Vector2(sx * 2, -9)]), fur)
+			b.draw_colored_polygon(PoolVector2Array([c + Vector2(sx * 10, -5), c + Vector2(sx * 10, -12), c + Vector2(sx * 5, -8)]), pink)
+		b.draw_circle(c + Vector2(0, 1), 11.0, fur)
+		b.draw_circle(c + Vector2(-4.5, -0.5), 2.0, dark)
+		b.draw_circle(c + Vector2(4.5, -0.5), 2.0, dark)
+		b.draw_colored_polygon(PoolVector2Array([c + Vector2(-1.8, 4), c + Vector2(1.8, 4), c + Vector2(0, 6)]), pink)
+		for sx in [-1, 1]:
+			b.draw_line(c + Vector2(sx * 3, 6), c + Vector2(sx * 15, 4), dark, 1.0)
+			b.draw_line(c + Vector2(sx * 3, 7), c + Vector2(sx * 15, 8), dark, 1.0)
+
+
+# switching kind: if it wore one of the old kind's ready-made looks, it gets the matching look of the new one
+func _set_species(kind, keep_colors):
+	if not SPECIES.has(kind):
+		return
+	var old = species
+	species = kind
+	if not keep_colors and old != kind:
+		var list = SPECIES[old]["presets"]
+		for i in range(list.size()):
+			var same = true
+			for part in PARTS:
+				if str(list[i][1][part[0]]).to_lower() != str(colors.get(part[0], "")).to_lower():
+					same = false
+			if same:
+				_reset_colors(min(i, SPECIES[kind]["presets"].size() - 1))
+				_apply_to_pickers()
+				break
+	_style_species_buttons()
+	_rebuild_presets()
+	sync_dirty = true
+
+
+func _on_species(kind):
+	_set_species(kind, false)
+	_save_config()
+
+
 func _on_preset(name):
 	_reset_colors(name)
 	_set_pet_name("")
@@ -1266,6 +1497,7 @@ func _on_save_palette(_text = ""):
 		name_field.placeholder_text = "full, delete one first"
 		return
 	palettes[name] = colors.duplicate()
+	palettes[name]["species"] = species
 	_set_pet_name(name)
 	name_field.text = ""
 	name_field.placeholder_text = "palette name"
@@ -1283,6 +1515,8 @@ func _on_use_palette(name):
 			colors[part[0]] = text
 	name_field.text = name # so saving again updates it
 	_set_pet_name(name)
+	if SPECIES.has(str(palettes[name].get("species", ""))):
+		_set_species(str(palettes[name]["species"]), true)
 	_apply_to_pickers()
 	sync_dirty = true
 	_save_config()
@@ -1445,7 +1679,8 @@ func _add_tooltip(control, header, body):
 
 func _load_config():
 	var file = File.new()
-	if not file.file_exists(CONFIG_PATH) or file.open(CONFIG_PATH, File.READ) != OK:
+	var path = CONFIG_PATH if file.file_exists(CONFIG_PATH) else OLD_CONFIG_PATH
+	if not file.file_exists(path) or file.open(path, File.READ) != OK:
 		return
 	var data = parse_json(file.get_as_text())
 	file.close()
@@ -1457,6 +1692,10 @@ func _load_config():
 		show_pet = bool(data["show"])
 	if data.has("howl"):
 		howl_on = bool(data["howl"])
+	if SPECIES.has(str(data.get("species", ""))):
+		species = str(data["species"])
+		_style_species_buttons()
+		_rebuild_presets()
 	if data.has("size"):
 		pet_size = clamp(float(data["size"]), SIZE_MIN, SIZE_MAX)
 	if data.has("name"):
@@ -1488,5 +1727,5 @@ func _save_config():
 	var file = File.new()
 	if file.open(CONFIG_PATH, File.WRITE) != OK:
 		return
-	file.store_string(to_json({"x": paw.rect_position.x, "y": paw.rect_position.y, "show": show_pet, "howl": howl_on, "size": pet_size, "name": pet_name, "colors": colors, "palettes": palettes}))
+	file.store_string(to_json({"x": paw.rect_position.x, "y": paw.rect_position.y, "show": show_pet, "species": species, "howl": howl_on, "size": pet_size, "name": pet_name, "colors": colors, "palettes": palettes}))
 	file.close()

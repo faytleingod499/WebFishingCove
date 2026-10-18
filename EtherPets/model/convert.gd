@@ -1,8 +1,10 @@
+# Turns an imported pet .glb (res://pet.glb) into a self-contained pet scene (res://pet.scn):
+# its own plain materials (recoloured by the mod at run time) and looping animations.
 extends SceneTree
+
 func _init():
-	var ps = load("res://wolf.glb")
-	var root = ps.instance()
-	var mi = root.find_node("Wolf", true, false)
+	var root = load("res://pet.glb").instance()
+	var mi = _find_mesh(root)
 	var mesh = mi.mesh
 	for i in range(mesh.get_surface_count()):
 		var old = mesh.surface_get_material(i)
@@ -19,8 +21,18 @@ func _init():
 	_own(root, root)
 	var out = PackedScene.new()
 	print("pack ", out.pack(root))
-	print("save ", ResourceSaver.save("res://wolf_pet.scn", out, ResourceSaver.FLAG_COMPRESS))
+	print("save ", ResourceSaver.save("res://pet.scn", out, ResourceSaver.FLAG_COMPRESS))
 	quit()
+
+func _find_mesh(n):
+	if n is MeshInstance:
+		return n
+	for c in n.get_children():
+		var r = _find_mesh(c)
+		if r:
+			return r
+	return null
+
 func _own(n, r):
 	for c in n.get_children():
 		c.owner = r
