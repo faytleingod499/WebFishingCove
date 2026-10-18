@@ -14,7 +14,8 @@ Needs [GDWeave](https://github.com/NotNite/GDWeave). Copy the `EtherPets` folder
 
 - Press **P** or click the **paw button** (drag it anywhere, it remembers where) for the pet menu:
   - The **wolf** and **cat** face buttons choose your pet.
-  - **Show my pet**, **Answer when I bark** (a wolf howls, a cat meows; at most once every 2 minutes).
+  - **Show my pet**, **Answer when I bark** (a wolf howls, a cat meows) and **Wait**, how long it
+    waits before answering again (15 seconds to 10 minutes, 2 minutes to start with).
   - **Size** from 50% to 150%.
   - Ready-made looks for each kind, and a colour picker for the fur, back, belly & paws, eyes,
     nose & mouth, and ears & tongue.
