@@ -56,6 +56,14 @@ var lure_tries = 0
 var prev_title = ""
 var chat_connected = false
 
+# the admin panel: only for admins of this server (the Feed plugin lists them in "wp_admins")
+var is_admin = false
+var admin_open = false
+var admin_button
+var admin_box
+var admin_signature = ""
+var ban_armed = {} # steam id -> until when its Ban button is waiting for the second click
+
 
 var poll_timer = 0.0
 var dragging = false
@@ -131,6 +139,17 @@ func _build_ui():
 	info.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	info.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	row.add_child(info)
+
+	# admins get a button left of the title that opens the player list under the panel
+	admin_button = Button.new()
+	admin_button.visible = false
+	admin_button.focus_mode = Control.FOCUS_NONE
+	admin_button.rect_min_size = Vector2(24, 20)
+	admin_button.connect("pressed", self, "_on_admin_toggle")
+	admin_button.connect("draw", self, "_draw_admin_icon")
+	_glass_button(admin_button)
+	info.add_child(admin_button)
+	_add_tooltip(admin_button, "Admin", "Players on the server, with kick and ban")
 
 	title_label = Label.new()
 	title_label.visible = false
@@ -209,6 +228,13 @@ func _build_ui():
 	_glass_button(gamble_button)
 	button_row.add_child(gamble_button)
 	button_row.add_child(bet_field)
+
+	# the admin player list, opening the panel downwards
+	admin_box = VBoxContainer.new()
+	admin_box.visible = false
+	admin_box.add_constant_override("separation", 3)
+	admin_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	column.add_child(admin_box)
 
 	# the list that opens under the panel with the Buy button
 	shop_panel = PanelContainer.new()
@@ -320,6 +346,12 @@ func _poll():
 		_rebuild_shop()
 
 	feed_cooldown_ms = int(str(steam.getLobbyData(lobby, "wp_feed_cd"))) * 1000
+
+	is_admin = str(steam.getLobbyData(lobby, "wp_admins")).split(",", false).has(str(net.STEAM_ID))
+	if not is_admin:
+		admin_open = false
+	if admin_open:
+		_rebuild_admin(net, lobby)
 
 	# the bet limits "min,max", empty when the server has no gambling
 	var gamble_text = str(steam.getLobbyData(lobby, "wp_gamble")).split(",")
@@ -596,6 +628,16 @@ func _refresh():
 	title_label.visible = title_text != ""
 	title_label.text = title_text
 	title_label.add_color_override("font_color", title_color)
+	admin_button.visible = is_admin
+	if admin_box.visible != (is_admin and admin_open):
+		admin_box.visible = is_admin and admin_open
+		panel.rect_size = Vector2() # shrink back to fit when it closes
+	if admin_box.visible:
+		for row in admin_box.get_children():
+			for button in row.get_children():
+				if button.has_meta("ban_id"):
+					var armed = ban_armed.get(button.get_meta("ban_id"), 0) > now
+					button.text = "Sure?" if armed else "Ban"
 	coin_label.text = "Coins: " + str(coins)
 	feeds_label.text = "Fed: " + str(feeds)
 	feed_button.disabled = now < feed_ready_at or now < feed_bar_end
@@ -704,6 +746,101 @@ func _on_board():
 		return
 	board_ready_at = now + 1500
 	_say("!wolves")
+
+
+# --- the admin panel ---
+
+func _on_admin_toggle():
+	admin_open = not admin_open
+	admin_signature = ""
+	admin_button.update()
+	if admin_open:
+		var net = get_node_or_null("/root/Network")
+		if net != null:
+			_rebuild_admin(net, net.STEAM_LOBBY_ID)
+
+
+# everyone in the lobby except the host (the server) and yourself, each with Kick and Ban
+func _rebuild_admin(net, lobby):
+	var host = str(steam.getLobbyOwner(lobby)) if steam != null else ""
+	var people = []
+	for member in net.LOBBY_MEMBERS:
+		var id = str(member.get("steam_id", ""))
+		if id == "" or id == host or id == str(net.STEAM_ID):
+			continue
+		people.append([str(member.get("steam_name", id)), id])
+	people.sort_custom(self, "_by_name")
+	var signature = str(people)
+	if signature == admin_signature:
+		return
+	admin_signature = signature
+	for child in admin_box.get_children():
+		admin_box.remove_child(child)
+		child.queue_free()
+	if people.empty():
+		var none = Label.new()
+		none.text = "No other players"
+		none.add_color_override("font_color", Color(1, 1, 1, 0.55))
+		admin_box.add_child(none)
+	for person in people:
+		var row = HBoxContainer.new()
+		row.add_constant_override("separation", 6)
+		row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		admin_box.add_child(row)
+		var name = Label.new()
+		name.text = person[0]
+		name.clip_text = true
+		name.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		name.rect_min_size = Vector2(120, 0)
+		name.add_color_override("font_color", Color(1, 1, 1))
+		row.add_child(name)
+		var kick = Button.new()
+		kick.text = "Kick"
+		kick.focus_mode = Control.FOCUS_NONE
+		kick.connect("pressed", self, "_on_kick", [person[1]])
+		_glass_button(kick)
+		row.add_child(kick)
+		var ban = Button.new()
+		ban.text = "Ban"
+		ban.focus_mode = Control.FOCUS_NONE
+		ban.rect_min_size = Vector2(52, 0)
+		ban.set_meta("ban_id", person[1])
+		ban.connect("pressed", self, "_on_ban", [person[1]])
+		_glass_button(ban)
+		ban.add_stylebox_override("normal", _glass(Color(0.45, 0.08, 0.08, 0.45), Color(1.0, 0.5, 0.5, 0.55), 8, 0))
+		row.add_child(ban)
+	panel.rect_size = Vector2()
+
+
+func _by_name(a, b):
+	return a[0].to_lower() < b[0].to_lower()
+
+
+# the server's own kick and ban commands, by Steam ID so names with spaces or twins can't go wrong
+func _on_kick(id):
+	_say("!kick " + str(id))
+
+
+# a ban needs a second click within a few seconds
+func _on_ban(id):
+	var now = OS.get_ticks_msec()
+	if ban_armed.get(id, 0) > now:
+		ban_armed.erase(id)
+		_say("!ban " + str(id))
+	else:
+		ban_armed[id] = now + 3000
+
+
+# a small shield, drawn so it does not depend on any font having an icon for it
+func _draw_admin_icon():
+	var b = admin_button
+	var c = Color(1, 1, 1, 0.95) if not admin_open else Color(0.55, 1.0, 1.0, 1.0)
+	var o = b.rect_size / 2.0
+	var pts = PoolVector2Array([o + Vector2(-6, -7), o + Vector2(6, -7), o + Vector2(6, 0), o + Vector2(0, 7), o + Vector2(-6, 0)])
+	b.draw_colored_polygon(pts, Color(c.r, c.g, c.b, 0.25))
+	pts.append(pts[0])
+	b.draw_polyline(pts, c, 1.5, true)
+	b.draw_line(o + Vector2(0, -4), o + Vector2(0, 4), c, 1.5)
 
 
 # the clipboard is drawn, so it does not depend on any font having an icon for it

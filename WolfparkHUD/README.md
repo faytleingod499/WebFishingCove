@@ -8,6 +8,12 @@ On such a server anything you type that starts with `!` is sent to the server on
 It only appears on servers that run the Cove `Feed` plugin from this repository (the plugin marks the server through
 the Steam lobby data). On every other server the mod stays hidden and does nothing.
 
+## Admin panel
+Admins (listed in the server's `admins.cfg`) get a shield button left of the heading. It opens a list of all players
+except the host and yourself, with **Kick** and **Ban** (Ban needs a second click). The buttons send the server's own
+`!kick <SteamID>` / `!ban <SteamID>` commands, hidden from chat. The Feed plugin tells the mod who is an admin through
+the lobby data key `wp_admins` (the Steam IDs of the admins online), so `Cove.Feed.dll` must be updated too.
+
 ## Install (players)
 1. Install GDWeave if you do not have it yet.
 2. Copy the `WolfparkHUD` folder from `package/` into `WEBFISHING/GDWeave/mods/`.

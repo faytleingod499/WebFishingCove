@@ -133,6 +133,7 @@ public class Feed : CovePlugin
     private long nextPublishTick;
     private ulong publishedLobby;
     private string publishedTitle = "";
+    private string publishedAdmins = ""; // the admins online, so the HUD can give them its admin panel
     private string publishedShop = "";
     private readonly Dictionary<ulong, string> published = new();
 
@@ -474,6 +475,7 @@ public class Feed : CovePlugin
                 published.Clear();
                 publishedShop = "";
                 publishedTitle = "";
+                publishedAdmins = "";
                 SteamMatchmaking.SetLobbyData(lobby, "wp_hud", "1");
                 publishedLobby = lobby.m_SteamID;
             }
@@ -497,6 +499,14 @@ public class Feed : CovePlugin
                 SteamMatchmaking.SetLobbyData(lobby, "wp_title_color", s.HudTitleColor);
                 SteamMatchmaking.SetLobbyData(lobby, "wp_chat_color", s.HudChatColor); // what colour the mod gives server messages
                 publishedTitle = title;
+            }
+
+            // the admins who are online (the HUD shows them the kick / ban panel; the server still checks every command)
+            string admins = string.Join(",", GetAllPlayers().Where(admin => IsPlayerAdmin(admin)).Select(admin => admin.SteamId.m_SteamID.ToString()));
+            if (admins != publishedAdmins)
+            {
+                SteamMatchmaking.SetLobbyData(lobby, "wp_admins", admins);
+                publishedAdmins = admins;
             }
 
             var wanted = new Dictionary<ulong, string>();
@@ -548,6 +558,7 @@ public class Feed : CovePlugin
                 SteamMatchmaking.SetLobbyData(lobby, "wp_title", "");
                 SteamMatchmaking.SetLobbyData(lobby, "wp_title_color", "");
                 SteamMatchmaking.SetLobbyData(lobby, "wp_chat_color", "");
+                SteamMatchmaking.SetLobbyData(lobby, "wp_admins", "");
                 foreach (ulong id in published.Keys)
                     SteamMatchmaking.SetLobbyData(lobby, "wp_p" + id, "");
             }
@@ -557,6 +568,7 @@ public class Feed : CovePlugin
             Log($"Could not clear the HUD data: {e.Message}");
         }
         published.Clear();
+        publishedAdmins = "";
         publishedLobby = 0;
         publishedShop = "";
         publishedTitle = "";

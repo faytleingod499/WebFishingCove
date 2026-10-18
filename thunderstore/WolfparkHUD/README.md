@@ -17,6 +17,13 @@ window starts expanded.
 While you're on the server you can also wear the titles **Lonely** and **Battery Charger** (Cosmetics, Misc tab).
 They're taken off again when you leave.
 
+## For admins
+
+Server admins get a small shield button to the left of the title. It opens a list of everyone on the server
+(except the host) under the panel, with **Kick** and **Ban** beside each name. Ban asks for a second click
+("Sure?") so it can't happen by accident. The buttons use the server's own kick and ban commands, so the
+server still checks that you're an admin.
+
 ## Other servers
 
 The panel only appears on servers that run the Feed plugin. Everywhere else the mod stays hidden and does
