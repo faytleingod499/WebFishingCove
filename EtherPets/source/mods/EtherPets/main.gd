@@ -6,7 +6,7 @@ extends Node
 # its colours. Your choices are shared through the Steam lobby, so other players who have this mod
 # see your pet exactly as you made it. Players without the mod do not see pets. Works on any server.
 
-const VERSION = "2.5.0"
+const VERSION = "2.6.0"
 const CONFIG_PATH = "user://etherpets.json"
 const OLD_CONFIG_PATH = "user://wolfpets.json" # from when it was Wolf Pets
 const SHADOW_PATH = "res://Scenes/Entities/Shadow/shadow.tscn"
@@ -45,9 +45,8 @@ const PARTS = [
 
 # every kind of pet: its model, how big it is, its noises, and its ready-made looks.
 # All of them share one skeleton and one set of animations, so the rest of the mod works for each.
-# "move": how it gets about ("walk", or "roll" tumbling head over heels: "ball" is how high its middle
-#         is when it lies flat, how far forward that middle is, and how far it reaches end to end,
-#         in the model's own units). "sit": what it does when its owner sits down
+# "move": how it gets about ("walk", or "roll" in somersaults: "roll_dist" is how far one somersault
+#         carries it, in the model's own units). "sit": what it does when its owner sits down
 #         ("beside" them, in their "lap", or on their "head").
 const SPECIES_ORDER = ["wolf", "cat", "raccoon"]
 const SPECIES = {
@@ -75,7 +74,7 @@ const SPECIES = {
 	},
 	"raccoon": {
 		"label": "Raccoon", "model": "res://mods/EtherPets/raccoon.scn", "scale": 0.6, "move": "roll", "sit": "head",
-		"ball": [0.53, 0.12, 0.92],                                       # height, forward offset, half its length
+		"roll_dist": 2.8,                                                 # one somersault, curled up and back onto its feet
 		"anims": {"wolf_sit": "raccoon_sit", "wolf_lie": "raccoon_flop"}, # its own loaf and sprawl
 		"pet_sound": "res://Sounds/cat_purr.ogg", "pet_pitch": 1.35,      # a happy trill
 		"call_sound": "res://mods/EtherPets/chitter.wav", "call_pitch": 1.0, # a chitter
@@ -329,7 +328,6 @@ func _update_pets(delta, net):
 			_move_pet(pet, owner_node, delta)
 		if pet["anim_name"] != "raccoon_ball":
 			pet["spin"].rotation.x = lerp_angle(wrapf(pet["spin"].rotation.x, -PI, PI), 0.0, clamp(delta * 10.0, 0.0, 1.0))
-		_roll_lift(pet)
 		_place_label(pet, wanted[key][4])
 		pet["howl_on"] = wanted[key][5]
 		pet["cooldown"] = wanted[key][7]
@@ -553,15 +551,8 @@ func _apply_size(pet, size):
 	pet["size"] = size
 	pet["scale"] = SPECIES[pet["species"]]["scale"] * size
 	pet["model"].scale = Vector3.ONE * pet["scale"]
-	# a rolling pet turns about the middle of its ball
-	var info = SPECIES[pet["species"]]
-	var pivot = Vector3()
-	if info["move"] == "roll":
-		pivot = Vector3(0, info["ball"][0], info["ball"][1]) * pet["scale"]
-	pet["pivot"] = pivot
-	pet["spin"].translation = pivot
-	pet["model"].translation = -pivot
-	_roll_lift(pet)
+	pet["spin"].translation = Vector3()
+	pet["model"].translation = Vector3()
 	var area = pet["area"]
 	if area != null and is_instance_valid(area) and area.has_meta("shape"):
 		var shape = area.get_meta("shape")
@@ -722,33 +713,18 @@ func _lie_beside(pet, owner_node, delta):
 	_play(pet, "wolf_lie" if pet["sat"] > LIE_AFTER else "wolf_idle", 1.0)
 
 
-# moving along: walking legs, or for a roller, tucked up and tumbling head over heels as it goes
+# moving along: walking legs, or for a roller, somersaults (the roll is in the animation itself),
+# turned over just fast enough that each one carries it as far as it actually goes
 func _locomote(pet, delta, speed = null):
 	var v = pet["speed"] if speed == null else speed
-	if SPECIES[pet["species"]]["move"] == "roll":
-		_play(pet, "raccoon_ball", 1.0)
-		pet["spin"].rotation.x -= v * delta / max(_roll_reach(pet), 0.05)
-		_roll_lift(pet)
+	var info = SPECIES[pet["species"]]
+	if info["move"] == "roll":
+		var length = 1.0
+		if pet["anim"] != null and pet["anim"].has_animation("raccoon_ball"):
+			length = pet["anim"].get_animation("raccoon_ball").length
+		_play(pet, "raccoon_ball", clamp(v * length / max(info["roll_dist"] * pet["scale"], 0.05), 0.4, 8.0))
 	else:
 		_play(pet, "wolf_walk", _stride_rate(v))
-
-
-# a tumbling body is long and flat, not round: how far its middle is off the ground at this point of the turn
-func _roll_reach(pet):
-	var info = SPECIES[pet["species"]]
-	if info["move"] != "roll":
-		return 0.0
-	var a = info["ball"][0]
-	var b = info["ball"][2]
-	var t = pet["spin"].rotation.x
-	return sqrt(pow(a * cos(t), 2) + pow(b * sin(t), 2)) * pet["scale"]
-
-
-# lifts it as it goes up on end, so it never sinks into the ground
-func _roll_lift(pet):
-	if not pet.has("pivot") or SPECIES[pet["species"]]["move"] != "roll":
-		return
-	pet["spin"].translation = Vector3(pet["pivot"].x, _roll_reach(pet), pet["pivot"].z)
 
 
 # how fast the legs go: in step with a walk or a run, and still quicker (but not silly) when it races
