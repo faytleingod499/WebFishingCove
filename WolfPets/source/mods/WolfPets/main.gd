@@ -6,7 +6,7 @@ extends Node
 # Your colours are shared through the Steam lobby, so other players who have this mod see your wolf
 # exactly as you made it. Players without the mod do not see pets at all. Works on any server.
 
-const VERSION = "1.6.0"
+const VERSION = "1.6.1"
 const CONFIG_PATH = "user://wolfpets.json"
 const MODEL_PATH = "res://mods/WolfPets/wolf_pet.scn"
 const SHADOW_PATH = "res://Scenes/Entities/Shadow/shadow.tscn"
@@ -15,7 +15,7 @@ const PAT_KEY = "wolfpat"   # "<wolf owner's steam id>;<count>" while petting, e
 const AREA_SCRIPT = "res://mods/WolfPets/pet_area.gd"
 const HOWL_PATH = "res://mods/WolfPets/howl.wav"
 const WHINE_PATH = "res://Sounds/dog_whine.ogg"  # the game's own dog whine, pitched up a little
-const HOWL_TIME = 1.7
+const HOWL_TIME = 2.0
 const SKELETON_PATH = "body/player_body/Armature/Skeleton"
 const POPUP_ID = "WOLFPETS"
 const DEFAULT_PAW_POS = Vector2(16, 140)
