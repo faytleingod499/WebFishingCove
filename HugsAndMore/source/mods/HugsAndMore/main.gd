@@ -1,6 +1,6 @@
 extends Node
 
-# EtherEmotes
+# Hugs and More
 # Emotes for two players who both have the mod. For now: a hug.
 #
 # Walk up to another player who has the mod and press the game's interact key at "Hug <name>". They get a
@@ -9,14 +9,14 @@ extends Node
 # (a small player hugs a big one around the middle). It ends after a few seconds, or as soon as either
 # of you walks away.
 #
-# Everything goes through the Steam lobby member data ("etheremote"), so every player with the mod sees
+# Everything goes through the Steam lobby member data ("hugsandmore"), so every player with the mod sees
 # the hug. Players without the mod see nothing unusual.
 
 const VERSION = "1.0.0"
-const SYNC_KEY = "etheremote"   # "1;<seq>;<ask|yes>;<emote>;<target steam id>;<the seq it answers>"
-const AREA_SCRIPT = "res://mods/EtherEmotes/emote_area.gd"
+const SYNC_KEY = "hugsandmore"   # "1;<seq>;<ask|yes>;<emote>;<target steam id>;<the seq it answers>"
+const AREA_SCRIPT = "res://mods/HugsAndMore/emote_area.gd"
 const SKELETON_PATH = "body/player_body/Armature/Skeleton"
-const POPUP_ID = "ETHEREMOTES"
+const POPUP_ID = "HUGSANDMORE"
 
 const ASK_TIME = 15.0      # an invitation is open this long
 const HUG_TIME = 5.0       # seconds of hugging
@@ -167,7 +167,7 @@ func _read_states(lobby, me):
 		var state = _parse(text)
 		if state == null:
 			state = {"seq": 0, "action": "", "emote": "", "target": 0, "ref": 0}
-		# players with the mod announce it under "etheremote_v" (their state is empty while idle)
+		# players with the mod announce it under "hugsandmore_v" (their state is empty while idle)
 		state["mod"] = text != "" or str(steam.getLobbyMemberData(lobby, int(id), SYNC_KEY + "_v")) != ""
 		states[int(id)] = state
 

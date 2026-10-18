@@ -1,8 +1,8 @@
 {
-    "Id": "EtherEmotes",
-    "PackPath": "EtherEmotes.pck",
+    "Id": "HugsAndMore",
+    "PackPath": "HugsAndMore.pck",
     "Metadata": {
-        "Name": "EtherEmotes",
+        "Name": "Hugs and More",
         "Author": "Fayt",
         "Version": "1.0.0",
         "Description": "Emotes for two players who both have the mod. Walk up to someone and hug them (they get to say yes first). Works on any server."

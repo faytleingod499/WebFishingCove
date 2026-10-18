@@ -1,10 +1,10 @@
-# EtherEmotes
+# Hugs and More
 
 Emotes for two players who both have the mod. The first one: **a hug**.
 
 ## Hugging
 
-1. Walk up to another player who also has EtherEmotes. The game's interact prompt shows **Hug <name>**.
+1. Walk up to another player who also has Hugs and More. The game's interact prompt shows **Hug <name>**.
 2. Press the interact key. They get an invitation: "<name> wants a hug!"
 3. They press **Y** (or click **Hug**) to hug back, or **No thanks**.
 
@@ -16,5 +16,5 @@ Nobody can be hugged without saying yes.
 
 ## Multiplayer
 
-Everyone with EtherEmotes sees the hug. Players without the mod don't see anything unusual. Works on any
+Everyone with Hugs and More sees the hug. Players without the mod don't see anything unusual. Works on any
 server.
