@@ -6,7 +6,7 @@ extends Node
 # Your colours are shared through the Steam lobby, so other players who have this mod see your wolf
 # exactly as you made it. Players without the mod do not see pets at all. Works on any server.
 
-const VERSION = "1.2.2"
+const VERSION = "1.2.3"
 const CONFIG_PATH = "user://wolfpets.json"
 const MODEL_PATH = "res://mods/WolfPets/wolf_pet.scn"
 const SHADOW_PATH = "res://Scenes/Entities/Shadow/shadow.tscn"
@@ -240,9 +240,9 @@ func _update_pets(delta, net):
 			_paint(pet, wanted[key][2])
 		if pet["pat"] == null:
 			_move_pet(pet, owner_node, delta)
-		# no "Pet wolf" prompt while it is being petted, standing idle or lying down
+		# "Pet wolf" is offered while it stands or walks, not while it sits, lies down or is being petted
 		if pet["area"] != null and is_instance_valid(pet["area"]):
-			pet["area"].visible = pet["pat"] == null and pet["anim_name"] != "wolf_idle" and pet["anim_name"] != "wolf_lie"
+			pet["area"].visible = pet["pat"] == null and pet["anim_name"] != "wolf_sit" and pet["anim_name"] != "wolf_lie"
 
 
 # --- making a pet ---
