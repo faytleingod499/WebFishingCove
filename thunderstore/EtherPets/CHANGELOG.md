@@ -1,8 +1,7 @@
 ## 2.8.6
-- The wolf and cat now sit like a real dog or cat: rump on the ground, back legs folded with the knee up and
-  hock with the feet flat and pointing forward (they have a knee joint now), and a gentle breathing loop
-  that no longer jumps when it repeats.
-
+- The wolf and cat now sit like a real dog or cat: rump on the ground, the back legs folded with the knee
+  up and forward and the feet flat on the ground pointing forward (they have a knee joint now), and a
+  gentle breathing loop that no longer jumps when it repeats.
 ## 2.8.3
 - Fixed: after joining a server, other players sometimes didn't see your pet until you turned it off and on
   again. Your pet is now re-sent until the lobby has it.
