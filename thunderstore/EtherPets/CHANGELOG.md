@@ -1,3 +1,7 @@
+## 2.8.7
+- The wolf's and cat's necks are no longer blocks: a smooth neck that tapers from the chest into the head,
+  with a gentle arch on top and the belly colour along the throat.
+
 ## 2.8.6
 - The wolf and cat now sit like a real dog or cat: rump on the ground, the back legs folded with the knee
   up and forward and the feet flat on the ground pointing forward (they have a knee joint now), and a
