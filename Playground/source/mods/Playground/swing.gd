@@ -25,7 +25,7 @@ const ROPE = 2.75            # from the bar down to the seat
 const SEAT_X = [-0.85, 0.85] # the two seats along the bar
 const FRAME_HALF = 2.05      # the A-frames at either end
 const LEG_SPREAD = 1.25      # how far the legs reach out front and back
-const PLACE_AHEAD = 3.2      # how far in front of me a new swing set stands
+const PLACE_AHEAD = 1.3       # how far in front of me a new swing set goes: right in front, so it lands where I aim it
 
 const PERIOD = 2.8           # seconds for a full swing there and back
 const START_AMP = 10.0       # degrees: a little sway to begin with

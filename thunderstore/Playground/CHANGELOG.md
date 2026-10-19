@@ -1,3 +1,6 @@
+## 1.2.3
+- A new swing set goes up right in front of you, so it's easy to put exactly where you want it.
+
 ## 1.2.2
 - You sit on top of the swing seat instead of halfway through it.
 

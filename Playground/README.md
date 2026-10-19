@@ -17,7 +17,7 @@ You can leave a round any time from the J menu. If whoever is it leaves, someone
 
 ## Swing set
 
-1. Open the Playground menu and choose **Place a swing set**. It goes up a few steps in front of you, facing you. Choose **Pick up your swing set** to take it down. Everyone can put up one.
+1. Open the Playground menu and choose **Place a swing set**. It goes up right in front of you, facing you. Choose **Pick up your swing set** to take it down. Everyone can put up one.
 2. Walk up to a seat and press **E** to sit. There are two seats, so bring a friend.
 3. The swing sways a little on its own. Press **Space right at the top of each swing**, front or back, to pump and go higher. A bar at the bottom of the screen lights up when it's time. A press at the wrong moment costs a little height.
 4. At full height, press **Space at the top of the forward swing** to let go and fly across the sky, just like a blue mushroom.
