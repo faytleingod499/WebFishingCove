@@ -1,3 +1,6 @@
+## 1.2.1
+- The swing seats are blue.
+
 ## 1.2.0
 - Swing set: put one up from the Playground menu. Two seats; pump at the top of each swing to go higher, and at full height let go to fly like a blue mushroom.
 

@@ -212,7 +212,7 @@ func _make_materials():
 	materials["wood"] = _mat(Color(0.56, 0.37, 0.22))
 	materials["dark"] = _mat(Color(0.42, 0.27, 0.16))
 	materials["rope"] = _mat(Color(0.72, 0.72, 0.74))
-	materials["seat"] = _mat(Color(0.86, 0.33, 0.27))
+	materials["seat"] = _mat(Color(0.25, 0.48, 0.86))
 
 
 func _mat(c):
