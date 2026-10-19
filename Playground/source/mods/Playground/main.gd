@@ -3,7 +3,8 @@ extends Node
 # Playground
 # Games for everyone who has the mod, on any server. The first one is Tag.
 #
-# Press J to open the Playground menu and start a round. Everyone with the mod gets a notice and has
+# Click the little star button (drag it anywhere, like the EtherPets paw) or press J to open the
+# Playground menu and start a round. Everyone with the mod gets a notice and has
 # 10 seconds to join (Y). Then everyone who joined, and whoever started it, is sent back to spawn and a
 # 5 second countdown begins. One player, picked at random, is "it": a glowing white star floats over
 # their head and they run 10% faster. "It" stays put during the countdown, so everyone else gets a head
@@ -21,7 +22,7 @@ extends Node
 # <n>;<target>;<t> is the last tag that player made: tag number n made <target> "it", <t> seconds into the
 # round (by the tagger's clock). The starter's tag 0 is the first "it". The highest number is "it" now.
 
-const VERSION = "1.0.0"
+const VERSION = "1.1.0"
 const SYNC_KEY = "playground"
 const SKELETON_PATH = "body/player_body/Armature/Skeleton"
 const POPUP_ID = "PLAYGROUND"
@@ -38,6 +39,8 @@ const TAG_HEIGHT = 1.6       # and no further apart than this up and down
 const NO_TAG_BACK = 3.0      # seconds the one who tagged you is safe from you
 const GONE_GRACE = 3.0       # "it" left: after this long someone else is picked
 const SPEED_VARS = ["walk_speed", "sprint_speed", "sneak_speed", "slow_walk_speed"]
+const CONFIG_PATH = "user://playground.json"
+const DEFAULT_BUTTON_POS = Vector2(16, 184)   # just under the EtherPets paw
 
 var steam = null
 var clock = 0.0
@@ -90,6 +93,13 @@ var locked_hud = null
 var star_texture = null
 var glow_texture = null
 var icons = {}               # steam id -> the star over their head
+var star_button              # the small button on screen, like the EtherPets paw
+var star_hover = false
+var star_pressed = false
+var star_dragging = false
+var press_pos = Vector2()
+var drag_offset = Vector2()
+var theme_applied = false
 
 
 func _ready():
@@ -98,6 +108,7 @@ func _ready():
 		steam = Engine.get_singleton("Steam")
 	_make_textures()
 	_build_ui()
+	_load_config()
 
 
 func _exit_tree():
@@ -138,6 +149,7 @@ func _process(delta):
 	_update_icons(players)
 	_update_invite(me)
 	_update_menu()
+	_refresh_button()
 	toast.visible = clock < toast_until
 
 
@@ -742,10 +754,32 @@ func _on_decline():
 # --- keys ---
 
 func _input(event):
+	# dragging the button is followed here, so it keeps going when the mouse leaves it
+	if star_pressed:
+		if event is InputEventMouseMotion:
+			var mouse = event.position
+			if not star_dragging and mouse.distance_to(press_pos) > 4.0:
+				star_dragging = true
+			if star_dragging:
+				var area = get_viewport().get_visible_rect().size
+				var pos = mouse + drag_offset
+				pos.x = clamp(pos.x, 0, max(0, area.x - star_button.rect_size.x))
+				pos.y = clamp(pos.y, 0, max(0, area.y - star_button.rect_size.y))
+				star_button.rect_position = pos
+				_place_menu()
+		elif event is InputEventMouseButton and event.button_index == BUTTON_LEFT and not event.pressed:
+			star_pressed = false
+			if star_dragging:
+				star_dragging = false
+				_save_config()
+			elif menu.visible:
+				_close_menu()
+			else:
+				_open_menu()
+		return
 	if not (event is InputEventKey) or not event.pressed or event.echo:
 		return
-	var hud = _get_hud()
-	if hud != null and hud.get("using_chat") == true:
+	if _typing():
 		return
 	if event.scancode == JOIN_KEY and invite_round != "" and invite_panel.visible:
 		_on_join()
@@ -754,7 +788,7 @@ func _input(event):
 		if menu.visible:
 			_close_menu()
 			get_tree().set_input_as_handled()
-		elif _hud_free():
+		elif _hud_free() and star_button.visible:
 			_open_menu()
 			get_tree().set_input_as_handled()
 	elif event.scancode == KEY_ESCAPE and menu.visible:
@@ -766,12 +800,16 @@ func _open_menu():
 	menu.visible = true
 	_lock_hud()
 	_update_menu()
+	if star_button != null:
+		star_button.update()
 
 
 func _close_menu():
 	if menu != null:
 		menu.visible = false
 	_unlock_hud()
+	if star_button != null:
+		star_button.update()
 
 
 func _update_menu():
@@ -786,9 +824,121 @@ func _update_menu():
 		menu_status.text = "Waiting for players to join..."
 	else:
 		menu_status.text = "You're in a round of tag."
-	menu.rect_size = Vector2()
-	var size = menu.get_viewport_rect().size
-	menu.rect_position = Vector2((size.x - menu.rect_size.x) / 2.0, size.y * 0.3)
+	_place_menu()
+
+
+# the menu opens beside the button, on whichever side has room
+func _place_menu():
+	if not menu.visible:
+		return
+	var area = get_viewport().get_visible_rect().size
+	var size = menu.get_combined_minimum_size()
+	menu.rect_size = size
+	var pos = star_button.rect_position + Vector2(star_button.rect_size.x + 6, 0)
+	if pos.x + size.x > area.x:
+		pos.x = star_button.rect_position.x - size.x - 6
+	pos.x = clamp(pos.x, 0, max(0, area.x - size.x))
+	pos.y = clamp(pos.y, 0, max(0, area.y - size.y))
+	menu.rect_position = pos
+
+
+# --- the star button ---
+
+func _draw_button():
+	var box = star_button.rect_size
+	var fill = Color(0.3, 1.0, 1.0, 0.30 if star_hover else 0.16)
+	if menu.visible:
+		fill = Color(0.3, 1.0, 1.0, 0.45)
+	star_button.draw_style_box(_glass(fill, Color(0.55, 1.0, 1.0, 0.8 if star_hover else 0.5), 8, 0), Rect2(Vector2(), box))
+	var mid = box / 2.0 + Vector2(0, 1)
+	var pts = PoolVector2Array()
+	for i in range(10):
+		var r = 11.0 if i % 2 == 0 else 4.6
+		var a = -PI / 2.0 + i * PI / 5.0
+		pts.append(mid + Vector2(cos(a), sin(a)) * r)
+	star_button.draw_colored_polygon(pts, Color(1, 1, 1, 0.95))
+
+
+func _on_button_hover(inside):
+	star_hover = inside
+	star_button.update()
+
+
+func _on_button_input(event):
+	if event is InputEventMouseButton and event.button_index == BUTTON_LEFT and event.pressed:
+		star_pressed = true
+		star_dragging = false
+		press_pos = event.global_position
+		drag_offset = star_button.rect_position - press_pos
+		star_button.accept_event()
+
+
+# like the game's own hotbar: only there while none of the game's menus are open
+func _refresh_button():
+	var hud = _get_hud()
+	var show = hud != null
+	if show:
+		if hud.get("menu") != 0 or hud.get("hud_hidden") == true:
+			show = false
+		var popups = hud.get("popups")
+		if typeof(popups) == TYPE_ARRAY:
+			for entry in popups:
+				if entry != POPUP_ID:
+					show = false
+		var options = get_node_or_null("/root/OptionsMenu")
+		if options != null and options.get("open") == true:
+			show = false
+	# everything in the game's own font, the same as the other mods
+	if show and not theme_applied:
+		theme_applied = true
+		var main = hud.get_node_or_null("main")
+		if main != null and main.theme != null:
+			for control in [star_button, menu, invite_panel, wait_panel, bar, big, results, toast]:
+				control.theme = main.theme
+	if not show and menu.visible:
+		_close_menu()
+	if not show:
+		star_pressed = false
+		star_dragging = false
+	star_button.visible = show
+
+
+func _typing():
+	var hud = _get_hud()
+	if hud != null and hud.get("using_chat") == true:
+		return true
+	var focus = star_button.get_focus_owner() if star_button != null else null
+	return focus != null and focus is LineEdit
+
+
+func _load_config():
+	var file = File.new()
+	if not file.file_exists(CONFIG_PATH) or file.open(CONFIG_PATH, File.READ) != OK:
+		return
+	var data = parse_json(file.get_as_text())
+	file.close()
+	if typeof(data) == TYPE_DICTIONARY and data.has("x") and data.has("y"):
+		star_button.rect_position = Vector2(float(data["x"]), float(data["y"]))
+
+
+func _save_config():
+	var file = File.new()
+	if file.open(CONFIG_PATH, File.WRITE) != OK:
+		return
+	file.store_string(to_json({"x": star_button.rect_position.x, "y": star_button.rect_position.y}))
+	file.close()
+
+
+func _add_tooltip(control, header, body):
+	var scene = load("res://Scenes/Singletons/Tooltips/tooltip_node.tscn") if ResourceLoader.exists("res://Scenes/Singletons/Tooltips/tooltip_node.tscn") else null
+	if scene == null or get_node_or_null("/root/Tooltip") == null:
+		control.hint_tooltip = header
+		return
+	var tip = scene.instance()
+	tip.header = "[color=#6a4420]" + header + "[/color]"
+	tip.body = body
+	tip.mouse_filter = Control.MOUSE_FILTER_PASS
+	control.add_child(tip)
 
 
 # --- the screen ---
@@ -798,7 +948,21 @@ func _build_ui():
 	layer.layer = 3
 	add_child(layer)
 
-	# the Playground menu (J)
+	# the star button: click for the menu, drag to move it (J works too)
+	star_button = Control.new()
+	star_button.rect_size = Vector2(34, 34)
+	star_button.rect_min_size = Vector2(34, 34)
+	star_button.rect_position = DEFAULT_BUTTON_POS
+	star_button.mouse_filter = Control.MOUSE_FILTER_STOP
+	star_button.visible = false
+	star_button.connect("draw", self, "_draw_button")
+	star_button.connect("gui_input", self, "_on_button_input")
+	star_button.connect("mouse_entered", self, "_on_button_hover", [true])
+	star_button.connect("mouse_exited", self, "_on_button_hover", [false])
+	layer.add_child(star_button)
+	_add_tooltip(star_button, "Playground", "Click for games (or press J), drag to move this button")
+
+	# the Playground menu
 	menu = _panel(0.75)
 	menu.visible = false
 	menu.mouse_filter = Control.MOUSE_FILTER_STOP
@@ -808,7 +972,7 @@ func _build_ui():
 	column.add_child(head)
 	var title = Label.new()
 	title.text = "Playground"
-	title.add_color_override("font_color", Color(0.55, 1.0, 1.0))
+	title.add_color_override("font_color", Color(0.75, 0.95, 1.0))
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	head.add_child(title)
 	var close = _button("x", "_close_menu")
@@ -869,7 +1033,7 @@ func _build_ui():
 	var rcol = _column(results)
 	var rtitle = Label.new()
 	rtitle.text = "Tag is over! Least time as it wins"
-	rtitle.add_color_override("font_color", Color(0.55, 1.0, 1.0))
+	rtitle.add_color_override("font_color", Color(0.75, 0.95, 1.0))
 	rcol.add_child(rtitle)
 	results_list = VBoxContainer.new()
 	results_list.add_constant_override("separation", 2)
@@ -910,10 +1074,8 @@ func _panel(alpha):
 
 func _margin(panel):
 	var m = MarginContainer.new()
-	for side in ["left", "right"]:
-		m.add_constant_override("margin_" + side, 10)
-	for side in ["top", "bottom"]:
-		m.add_constant_override("margin_" + side, 6)
+	for side in ["left", "right", "top", "bottom"]:
+		m.add_constant_override("margin_" + side, 8)
 	m.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	panel.add_child(m)
 	return m
@@ -921,7 +1083,7 @@ func _margin(panel):
 
 func _column(panel):
 	var c = VBoxContainer.new()
-	c.add_constant_override("separation", 5)
+	c.add_constant_override("separation", 6)
 	_margin(panel).add_child(c)
 	return c
 

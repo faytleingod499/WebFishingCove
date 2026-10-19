@@ -6,7 +6,7 @@ Games to play with everyone who has the mod, on any server. The first game is **
 
 ## Tag
 
-1. Press **J** to open the Playground menu and choose **Start a round of Tag**.
+1. Click the little **star button** on the left of your screen (or press **J**) and choose **Start a round of Tag**. Drag the button to put it wherever you like.
 2. Everyone nearby with Playground gets a notice and has **10 seconds** to join by pressing **Y**.
 3. Everyone who joined is sent back to spawn and a **5 second countdown** begins.
 4. One player is picked at random to be **it**. A glowing white star floats above their head, and they run **10% faster**. "It" has to wait out the countdown, so everyone else gets a head start.
