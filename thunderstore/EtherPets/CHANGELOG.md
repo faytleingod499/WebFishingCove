@@ -1,3 +1,6 @@
+## 2.9.1
+- The wolf no longer leans slightly to one side.
+
 ## 2.9.0
 - Standard colour areas on every pet, in the same order: Body, Back, Belly, Front legs, Back legs, Paws, Tail, Eyes, Eye shine, Mouth, Tongue, Ear backs, Inner ears, Head, Muzzle, Nose.
 - Special areas: Neck, Throat and Tail tip (wolf and cat), Whiskers (cat), Tail rings and Mask (raccoon).
