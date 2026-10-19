@@ -1,3 +1,6 @@
+## 2.9.9
+- Everyone now sees your wolf lying on the same side of you. Your game picks the side and shares it (players on older versions still pick their own).
+
 ## 2.9.8
 - The description now notes that this mod was created with the assistance of AI.
 

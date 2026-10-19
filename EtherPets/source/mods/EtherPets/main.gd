@@ -6,7 +6,7 @@ extends Node
 # its colours. Your choices are shared through the Steam lobby, so other players who have this mod
 # see your pet exactly as you made it. Players without the mod do not see pets. Works on any server.
 
-const VERSION = "2.9.8"
+const VERSION = "2.9.9"
 const CONFIG_PATH = "user://etherpets.json"
 const OLD_CONFIG_PATH = "user://wolfpets.json" # from when it was Wolf Pets
 const SHADOW_PATH = "res://Scenes/Entities/Shadow/shadow.tscn"
@@ -148,6 +148,7 @@ var size_slider
 var size_label
 var colors = {}
 var sync_dirty = true
+var my_side = 0 # which side of me my pet lies on while I sit (-1 left, 1 right, 0 not lying down), shared so everyone sees the same
 var sync_timer = 0.0
 var synced_lobby = 0
 
@@ -262,7 +263,7 @@ func _sync_text():
 	var list = []
 	for part in PARTS:
 		list.append(_color_text(colors, part[0], species))
-	return "1;" + ("1" if show_pet else "0") + ";" + PoolStringArray(list).join(",") + ";" + ("%.2f" % pet_size) + ";" + _clean_name(pet_name) + ";" + ("1" if howl_on else "0") + ";" + species + ";" + str(answer_cooldown)
+	return "1;" + ("1" if show_pet else "0") + ";" + PoolStringArray(list).join(",") + ";" + ("%.2f" % pet_size) + ";" + _clean_name(pet_name) + ";" + ("1" if howl_on else "0") + ";" + species + ";" + str(answer_cooldown) + ";" + str(my_side)
 
 
 # names travel inside the lobby text, so they lose the separators and stay short
@@ -284,6 +285,7 @@ func _parse_sync(text):
 	cfg["howl"] = bits[5] != "0" if bits.size() > 5 else true
 	cfg["species"] = bits[6] if bits.size() > 6 and SPECIES.has(bits[6]) else "wolf"
 	cfg["cooldown"] = clamp(int(bits[7]), COOLDOWN_MIN, COOLDOWN_MAX) if bits.size() > 7 and bits[7].is_valid_integer() else COOLDOWN_DEFAULT
+	cfg["side"] = int(bits[8]) if bits.size() > 8 and bits[8] in ["-1", "1"] else 0
 	return cfg
 
 
@@ -358,11 +360,11 @@ func _update_pets(delta, net):
 		if not _is_real_player(player):
 			continue
 		if player.get("controlled") == true:
-			wanted["me"] = [player, show_pet, colors, pet_size, pet_name, howl_on, species, answer_cooldown]
+			wanted["me"] = [player, show_pet, colors, pet_size, pet_name, howl_on, species, answer_cooldown, my_side]
 		else:
 			var id = player.get("owner_id")
 			if remote_cfg.has(id) and remote_cfg[id]["show"]:
-				wanted[id] = [player, true, remote_cfg[id]["colors"], remote_cfg[id]["size"], remote_cfg[id]["name"], remote_cfg[id]["howl"], remote_cfg[id]["species"], remote_cfg[id]["cooldown"]]
+				wanted[id] = [player, true, remote_cfg[id]["colors"], remote_cfg[id]["size"], remote_cfg[id]["name"], remote_cfg[id]["howl"], remote_cfg[id]["species"], remote_cfg[id]["cooldown"], remote_cfg[id]["side"]]
 
 	for key in pets.keys():
 		var pet = pets[key]
@@ -380,6 +382,7 @@ func _update_pets(delta, net):
 			var pet = _make_pet(owner_node, wanted[key][6])
 			if pet == null:
 				continue
+			pet["key"] = key
 			pets[key] = pet
 			if pet["area"] != null:
 				pet["area"].pet_key = key
@@ -396,6 +399,7 @@ func _update_pets(delta, net):
 		_place_label(pet, wanted[key][4])
 		pet["howl_on"] = wanted[key][5]
 		pet["cooldown"] = wanted[key][7]
+		pet["told_side"] = wanted[key][8]
 		_listen_for_bark(pet, owner_node, delta)
 		# "Pet <name>" is offered while it stands or walks, not while it sits, lies down or is being petted
 		if pet["area"] != null and is_instance_valid(pet["area"]):
@@ -466,7 +470,7 @@ func _make_pet(owner_node, kind):
 		"area": area, "pat": null, "skeleton": model.find_node("Skeleton", true, false),
 		"scale": PET_SCALE, "size": 1.0, "side": 0, "label": _make_label(), "species": kind, "spin": spin, "lap": "", "hop_t": 0.0, "hop_from": Vector3(),
 		"voice": _make_voice(node), "barking": false, "howl_wait": -1.0, "howl_t": -1.0,
-		"howl_on": true, "last_answer": -10000000}
+		"howl_on": true, "last_answer": -10000000, "told_side": 0, "key": ""}
 	_play(pet, "wolf_idle", 1.0)
 	return pet
 
@@ -704,6 +708,9 @@ func _move_pet(pet, owner_node, delta):
 			_perch(pet, owner_node, delta, sit)
 		return
 	pet["side"] = 0
+	if str(pet["key"]) == "me" and my_side != 0:
+		my_side = 0
+		sync_dirty = true
 	# its owner stood up while it was in their lap: it hops down first
 	if pet["lap"] != "" and pet["lap"] != "go":
 		_hop_down(pet, owner_node, delta)
@@ -759,8 +766,15 @@ func _lie_beside(pet, owner_node, delta):
 	var f = _facing(owner_node)
 	var right = f.cross(Vector3.UP).normalized()
 	var pos = node.global_transform.origin
-	if pet["side"] == 0:
+	# Every player moves my pet on their own screen, so it can be on a different side of me for each of
+	# them. My game picks the side (whichever one it is already on) and tells everyone; theirs follow it.
+	if str(pet["key"]) != "me" and pet["told_side"] != 0:
+		pet["side"] = pet["told_side"]
+	elif pet["side"] == 0:
 		pet["side"] = 1 if (pos - here).dot(right) >= 0 else -1
+	if str(pet["key"]) == "me" and my_side != pet["side"]:
+		my_side = pet["side"]
+		sync_dirty = true
 	# set back by the length of its neck and head, so its head lies level with its owner
 	var spot = here + right * pet["side"] * (0.35 * _player_size(owner_node) + 0.42 * pet["scale"]) - f * 0.85 * pet["scale"]
 	var to = Vector3(spot.x - pos.x, 0, spot.z - pos.z)
