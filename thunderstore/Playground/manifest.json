@@ -1,0 +1,9 @@
+{
+    "name": "Playground",
+    "version_number": "1.0.0",
+    "website_url": "https://github.com/faytleingod499/WebFishingCove",
+    "description": "Games for everyone who has the mod, on any server. Starts with Tag: press J to start a round, others press Y to join. This mod was created with the assistance of AI.",
+    "dependencies": [
+        "NotNet-GDWeave-2.0.14"
+    ]
+}

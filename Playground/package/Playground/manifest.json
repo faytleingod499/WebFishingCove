@@ -1,0 +1,10 @@
+{
+    "Id": "Playground",
+    "PackPath": "Playground.pck",
+    "Metadata": {
+        "Name": "Playground",
+        "Author": "Fayt",
+        "Version": "1.0.0",
+        "Description": "Games for everyone who has the mod, on any server. Starts with Tag: press J to start a round, others press Y to join. This mod was created with the assistance of AI."
+    }
+}
