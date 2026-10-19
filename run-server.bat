@@ -7,6 +7,14 @@ rem Crash Watch: the server writes its crash and hang reports into the crashwatc
 rem what only it can see: the exit code (crashwatch\last-exit.txt) and the Windows event log entries about the
 rem crash (crashwatch\last-events.txt). The next start of the server puts both into the crash report.
 cd /d "%~dp0"
+
+rem this script has to sit next to the server (Cove.exe), not in the downloaded source folder
+if not exist Cove.exe if not exist Cove.dll (
+    echo Cove.exe was not found in %~dp0
+    echo Put run-server.bat in the same folder as Cove.exe ^(the "dist" folder after build-all.bat^) and start it there.
+    pause
+    exit /b 1
+)
 if not exist crashwatch\dumps mkdir crashwatch\dumps
 
 rem when .NET itself dies (stack overflow, a crash in native code), write a memory dump of the moment.
