@@ -1,3 +1,6 @@
+## 2.9.6
+- The wolf lying beside you rests its whole belly on the ground; its back legs stay tucked where they were.
+
 ## 2.9.5
 - The wolf lying beside you gives a gentle tail wag.
 
