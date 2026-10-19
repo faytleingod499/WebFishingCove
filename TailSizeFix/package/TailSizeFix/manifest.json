@@ -1,0 +1,10 @@
+{
+    "Id": "TailSizeFix",
+    "PackPath": "TailSizeFix.pck",
+    "Metadata": {
+        "Name": "Tail Size Fix",
+        "Author": "Fayt",
+        "Version": "1.0.0",
+        "Description": "Tails grow and shrink with the player. Fixes every player's tail, client side, on any server."
+    }
+}
