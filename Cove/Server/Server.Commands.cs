@@ -399,50 +399,6 @@ namespace Cove.Server
             return true;
         }
 
-        private string publishedCommands = "";
-        private ulong publishedCommandsLobby;
-
-        /// <summary>
-        /// Puts the command list into the lobby data for the Wolfpark HUD mod's help button:
-        ///   wp_cmds   = the commands everyone can use
-        ///   wp_cmds_a = the extra commands for admins
-        /// as "command TAB description" lines. Only written when something changed.
-        /// </summary>
-        public void PublishCommandList()
-        {
-            if (!SteamLobby.IsValid())
-                return;
-
-            var all = Commands.ToList().OrderBy(c => c.Command).ToList();
-            string everyone = CommandLines(all.Where(c => c.Access == CommandAccess.Everyone));
-            string admins = CommandLines(all.Where(c => c.Access == CommandAccess.Admin));
-            string signature = everyone + "\u0001" + admins;
-            if (signature == publishedCommands && publishedCommandsLobby == SteamLobby.m_SteamID)
-                return;
-
-            SteamMatchmaking.SetLobbyData(SteamLobby, "wp_cmds", everyone);
-            SteamMatchmaking.SetLobbyData(SteamLobby, "wp_cmds_a", admins);
-            publishedCommands = signature;
-            publishedCommandsLobby = SteamLobby.m_SteamID;
-        }
-
-        // Steam allows 8 KB per lobby data value, the list stops before that
-        private static string CommandLines(IEnumerable<RegisteredCommand> commands)
-        {
-            var text = new StringBuilder();
-            foreach (var cmd in commands)
-            {
-                string description = (cmd.Description ?? "").Replace('\n', ' ').Replace('\t', ' ').Replace('\r', ' ');
-                string line = cmd.Command + "\t" + description;
-                if (Encoding.UTF8.GetByteCount(text.ToString()) + Encoding.UTF8.GetByteCount(line) + 1 > 8000)
-                    break;
-                if (text.Length > 0)
-                    text.Append('\n');
-                text.Append(line);
-            }
-            return text.ToString();
-        }
-
         public RegisteredCommand? FindCommand(string name)
         {
             return Commands.Find(c =>
