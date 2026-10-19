@@ -1,3 +1,7 @@
+## 2.9.3
+- The wolf's Muzzle colour now covers its whole snout, like the cat and raccoon.
+- New Face colour area on every pet: the front of the head around the eyes. It starts as the head colour.
+
 ## 2.9.2
 - Fixed the raccoon facing the wrong way and floating far from your head (its model was off-centre in 2.9.0 and 2.9.1).
 

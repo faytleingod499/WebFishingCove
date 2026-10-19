@@ -6,7 +6,7 @@ extends Node
 # its colours. Your choices are shared through the Steam lobby, so other players who have this mod
 # see your pet exactly as you made it. Players without the mod do not see pets. Works on any server.
 
-const VERSION = "2.9.2"
+const VERSION = "2.9.3"
 const CONFIG_PATH = "user://etherpets.json"
 const OLD_CONFIG_PATH = "user://wolfpets.json" # from when it was Wolf Pets
 const SHADOW_PATH = "res://Scenes/Entities/Shadow/shadow.tscn"
@@ -57,12 +57,13 @@ const PARTS = [
 	["throat", "Throat", "pet_throat"],
 	["hindlegs", "Back legs", "pet_hindlegs"],
 	["tailbase", "Tail", "pet_tailbase"],
+	["face", "Face", "pet_face"],
 ]
 # a part with no colour of its own (an older palette, or someone on an older version) takes
 # the colour of the part it used to share, or a fixed colour ("#...")
 const DERIVE = {"paws": "belly", "muzzle": "belly", "legs": "paws", "tail": "back", "mask": "back", "earback": "back", "mouth": "nose",
 	"tongue": "ears", "shine": "#ffffff", "whiskers": "#f2f2f2",
-	"head": "fur", "neck": "fur", "throat": "belly", "hindlegs": "fur", "tailbase": "fur"}
+	"head": "fur", "neck": "fur", "throat": "belly", "hindlegs": "fur", "tailbase": "fur", "face": "head"}
 
 # every kind of pet: its model, how big it is, its noises, and its ready-made looks.
 # All of them share one skeleton and one set of animations, so the rest of the mod works for each.
@@ -71,7 +72,7 @@ const DERIVE = {"paws": "belly", "muzzle": "belly", "legs": "paws", "tail": "bac
 #         ("beside" them, in their "lap", or on their "head").
 const SPECIES_ORDER = ["wolf", "cat", "raccoon"]
 const STANDARD_PARTS = ["fur", "back", "belly", "legs", "hindlegs", "paws", "tailbase", "eyes", "shine", "mouth", "tongue",
-	"earback", "ears", "head", "muzzle", "nose"]
+	"earback", "ears", "head", "face", "muzzle", "nose"]
 const SPECIES = {
 	"wolf": {
 		"label": "Wolf", "model": "res://mods/EtherPets/wolf.scn", "scale": 0.82, "move": "walk", "sit": "beside",
