@@ -1,3 +1,6 @@
+## 2.9.7
+- The cat curled in your lap keeps its front paws still while it breathes.
+
 ## 2.9.6
 - The wolf lying beside you rests its whole belly on the ground; its back legs stay tucked where they were.
 
