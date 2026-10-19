@@ -15,6 +15,16 @@ Cove is a dedicated server for WebFishing written in C#.
 - .NET – Cove is written in C# on the .NET framework, making plugin development easy, fast, and accessible.
 - Support – Cove has a Discord server for fast support for anything related to Cove (including plugin development).
 
+# Client mods
+
+The client-side GDWeave mods made alongside this server now live in their own repositories:
+
+- [EtherPets](https://github.com/faytleingod499/EtherPets): a pet wolf, cat or raccoon that follows you around.
+- [WolfparkHUD](https://github.com/faytleingod499/WolfparkHUD): the coin panel for servers running the Cove.Feed plugin.
+- [HugsAndMore](https://github.com/faytleingod499/HugsAndMore): hugs, high fives and kisses between players with the mod.
+- [TailSizeFix](https://github.com/faytleingod499/TailSizeFix): tails grow and shrink with their player.
+- [Playground](https://github.com/faytleingod499/Playground): Tag and a two-seat swing set.
+
 # How it works
 
 Cove uses none of WebFishing's code. Instead, it uses C# to emulate the same network calls that the official game makes to host a lobby.
