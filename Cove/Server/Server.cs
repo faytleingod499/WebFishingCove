@@ -595,8 +595,10 @@ namespace Cove.Server
             {
                 try
                 {
+                    CrashWatch.Busy("steam", $"waiting for the state lock (Steam callback {name})");
                     lock (stateLock)
                     {
+                        CrashWatch.Busy("steam", $"Steam callback {name}");
                         callback(param);
                     }
                 }
@@ -631,7 +633,9 @@ namespace Cove.Server
                 Thread.Sleep(1000/24); // 24hz
                 try
                 {
+                    CrashWatch.Busy("steam", "SteamAPI.RunCallbacks");
                     SteamAPI.RunCallbacks();
+                    CrashWatch.Idle("steam");
                 }
                 catch (Exception e)
                 {
@@ -663,6 +667,7 @@ namespace Cove.Server
                             // cause the rest of the batch to be dropped
                             try
                             {
+                                CrashWatch.Busy("network", $"waiting for the state lock (packet from {messages[j].identity}, channel {i}, {messages[j].size} bytes)");
                                 if (i == 3 && messages[j].size > 50000)
                                 {
                                     string UserName = SteamFriends.GetFriendPersonaName(new CSteamID(messages[j].identity));
@@ -672,11 +677,15 @@ namespace Cove.Server
 
                                 lock (stateLock)
                                 {
+                                    CrashWatch.Busy("network", $"packet from {messages[j].identity}, channel {i}, {messages[j].size} bytes");
                                     OnNetworkPacket(messages[j].payload, new CSteamID(messages[j].identity));
                                 }
                             }
                             catch (Exception e)
                             {
+                                // even with the error messages off, Crash Watch keeps a short note of it
+                                CrashWatch.CountError();
+                                CrashWatch.Note("network", $"Packet from {messages[j].identity} on channel {i} failed: {e.GetType().Name}: {e.Message}");
                                 if (showErrorMessages)
                                 {
                                     Log($"-- Error responding to packet from {messages[j].identity} on channel {i}! --");
@@ -700,6 +709,7 @@ namespace Cove.Server
                     Thread.Sleep(100);
                 }
 
+                CrashWatch.Idle("network");
                 if (!didWork)
                     Thread.Sleep(10);
             }
@@ -741,6 +751,12 @@ namespace Cove.Server
                 SteamAPI.Shutdown();
             }
             catch (Exception e) { logger.Error(e.ToString()); }
+
+            // a normal stop clears the Crash Watch flag, anything else gets a crash report
+            if (exitCode == 0)
+                CrashWatch.CleanExit();
+            else
+                CrashWatch.FailedExit(exitCode);
 
             Environment.Exit(exitCode);
         }

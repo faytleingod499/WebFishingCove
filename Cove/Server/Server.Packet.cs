@@ -122,6 +122,9 @@ namespace Cove.Server
             if (packetInfo == null || !TryGetString(packetInfo, "type", out string packetType))
                 return; // unreadable packet, or no type to dispatch on
 
+            CrashWatch.CountPacket(packetType);
+            CrashWatch.Busy("network", $"packet \"{packetType}\" from {sender.m_SteamID}");
+
             var fromPlayer = AllPlayers.Find(p => p.SteamId.m_SteamID == sender.m_SteamID);
             if (fromPlayer != null)
             {

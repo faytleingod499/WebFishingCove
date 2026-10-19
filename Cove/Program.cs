@@ -22,9 +22,13 @@ using Serilog;
 
 long epoch = new DateTimeOffset(DateTime.UtcNow).ToUnixTimeSeconds();
 
+// Crash Watch first, so even a crash during startup is recorded (and a crash of the last run gets its report now)
+CrashWatch.Start();
+
 var serverLogger = new LoggerConfiguration()
     .WriteTo.Console()
     .WriteTo.File($"logs/log-{epoch}.txt") // Daily rolling logs
+    .WriteTo.Sink(new CrashWatchSink()) // every log line also goes into the Crash Watch blackbox
     .CreateLogger();
 
 //Console.SetOut(new SerilogTextWriter(serverLogger));
@@ -32,6 +36,7 @@ var serverLogger = new LoggerConfiguration()
 
 CoveServer webfishingServer = new CoveServer();
 webfishingServer.logger = serverLogger;
+CrashWatch.Server = webfishingServer;
 
 void Log(string message)
 {
@@ -44,6 +49,7 @@ AppDomain.CurrentDomain.UnhandledException += (sender, args) =>
 {
     serverLogger.Fatal("Unhandled exception occured");
     serverLogger.Fatal(args.ExceptionObject.ToString());
+    CrashWatch.ReportCrash(args.ExceptionObject as Exception, "The server crashed with an unhandled exception.");
     webfishingServer.Stop(1);
 };
 
@@ -109,6 +115,7 @@ while (true)
         continue;
 
     string command = input.Split(' ')[0];
+    CrashWatch.Note("console", input);
 
     try
     {

@@ -71,6 +71,22 @@ If you have any questions or issues with Cove, **create an issue on GitHub** or 
 4. Look below
    - Links for finding or creating plugins are below.
 
+# Crash Watch
+
+The server records what it is doing so a crash or a freeze can be traced afterwards. Start it with `run-server.bat`
+(it restarts the server after a crash and records the exit code) and look in the `crashwatch` folder:
+
+| File | What it is |
+|---|---|
+| `crash-*.txt` | A crash report. Written the moment an unhandled exception happens, or at the next start when the last run died in a way .NET can't catch (stack overflow, a crash in `steam_api64.dll`, out of memory, killed). It has the exception or the exit code and what it means, what every loop was doing, the Windows event log entries, the stats leading up to it and the last 300 log lines. |
+| `hang-*.txt` | A loop (network, Steam callbacks, the 12 Hz tick) stuck on one thing for 30 s: a freeze or a deadlock. It says what each loop was doing, so "waiting for the state lock" on one loop points at the loop that holds it. A memory dump goes in `dumps/`, and if it's still stuck 2 minutes later the server restarts. |
+| `stats.csv` | Every 30 s: memory, GC heap, threads, handles, CPU, players, actors, chalk cells, packets, errors and exceptions. Open it in Excel to spot something that only grows. |
+| `dumps/` | Memory dumps of crashes and hangs (the newest 3). Open with Visual Studio or `dotnet-dump analyze` (`clrstack -all` shows every thread). |
+| `blackbox.bin` | The recorder itself: the last 4000 log lines and notes, kept in a memory mapped file so it survives any crash. |
+
+Admins can type `!health` in chat for a quick check (memory, threads, stuck loops) and a snapshot report.
+The settings are in `crashwatch.txt` (hang time, restart after a hang, dumps on or off, stats interval).
+
 # Other info
 
 Some default / popular plugins can be found in the [CovePlugins](https://github.com/DrMeepso/CovePlugins) repo.

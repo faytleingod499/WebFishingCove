@@ -112,6 +112,14 @@ namespace Cove.Server
             SetCommandDescription("exit", "Shuts down the server (host only)");
             SetCommandAccess("exit", CommandAccess.Host);
 
+            RegisterCommand("health", (player, args) =>
+            {
+                if (!isPlayerAdmin(player.SteamId) && player.SteamId != serverPlayer.SteamId) return;
+                messagePlayer(CrashWatch.Health(writeSnapshot: true), player.SteamId);
+            });
+            SetCommandDescription("health", "Shows memory, threads and stuck loops, and writes a Crash Watch snapshot");
+            SetCommandAccess("health", CommandAccess.Admin);
+
             RegisterCommand("kick", (player, args) =>
             {
                 if (!isPlayerAdmin(player.SteamId)) return;

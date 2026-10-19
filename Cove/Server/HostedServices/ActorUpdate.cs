@@ -73,11 +73,14 @@ namespace Cove.Server.HostedServices
                 // a plugin that throws in onUpdate must not stop the actors (rain clouds etc) from being updated
                 foreach (PluginInstance plugin in server.loadedPlugins.ToList())
                 {
+                    CrashWatch.Busy("tick", $"plugin \"{plugin.pluginName}\" onUpdate");
                     server.SafePluginCall(plugin, () => plugin.plugin.onUpdate());
                 }
 
+                CrashWatch.Busy("tick", "waiting for the state lock (actor updates)");
                 lock (server.serverActorListLock)
                 {
+                    CrashWatch.Busy("tick", $"actor updates ({server.serverOwnedInstances.Count} actors)");
                     foreach (WFActor actor in server.serverOwnedInstances.ToList())
                     {
                         try
@@ -131,6 +134,7 @@ namespace Cove.Server.HostedServices
                     updateI = 0;
                 }
 
+                CrashWatch.Idle("tick");
                 Volatile.Write(ref running, 0);
             }
         }
