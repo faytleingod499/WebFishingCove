@@ -1,3 +1,9 @@
+## 2.9.0
+- Standard colour areas on every pet, in the same order: Body, Back, Belly, Front legs, Back legs, Paws, Tail, Eyes, Eye shine, Mouth, Tongue, Ear backs, Inner ears, Head, Muzzle, Nose.
+- Special areas: Neck, Throat and Tail tip (wolf and cat), Whiskers (cat), Tail rings and Mask (raccoon).
+- The raccoon has a back patch and ear backs; the cat has ear backs; the cat and raccoon have a little tongue.
+- New areas start as the colour they had before, so saved palettes and older versions look the same.
+
 ## 2.8.9
 - The colour pickers also fold away under a "Colours (N)" header, and it remembers whether you left it open.
 
