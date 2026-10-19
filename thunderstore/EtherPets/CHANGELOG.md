@@ -1,3 +1,6 @@
+## 2.8.9
+- The colour pickers also fold away under a "Colours (N)" header, and it remembers whether you left it open.
+
 ## 2.8.8
 - The saved palette list now folds away under a "My palettes (N)" header, so the menu takes less room. It remembers whether you left it open.
 

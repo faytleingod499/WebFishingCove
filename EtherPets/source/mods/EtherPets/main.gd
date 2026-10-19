@@ -6,7 +6,7 @@ extends Node
 # its colours. Your choices are shared through the Steam lobby, so other players who have this mod
 # see your pet exactly as you made it. Players without the mod do not see pets. Works on any server.
 
-const VERSION = "2.8.8"
+const VERSION = "2.8.9"
 const CONFIG_PATH = "user://etherpets.json"
 const OLD_CONFIG_PATH = "user://wolfpets.json" # from when it was Wolf Pets
 const SHADOW_PATH = "res://Scenes/Entities/Shadow/shadow.tscn"
@@ -164,6 +164,9 @@ var name_field
 var palette_box
 var palette_toggle
 var palettes_open = false # the saved palette list starts folded
+var colors_grid
+var colors_toggle
+var colors_open = false # so do the colour pickers
 var locked_hud = null
 var theme_applied = false
 
@@ -1332,7 +1335,17 @@ func _build_ui():
 	column.add_child(preset_row)
 	_rebuild_presets()
 
+	# the colour pickers fold away under a header too, the list gets long
+	colors_toggle = Button.new()
+	colors_toggle.align = Button.ALIGN_LEFT
+	colors_toggle.focus_mode = Control.FOCUS_NONE
+	colors_toggle.connect("pressed", self, "_on_toggle_colors")
+	_glass_button(colors_toggle)
+	colors_toggle.add_color_override("font_color", Color(0.75, 0.95, 1.0))
+	column.add_child(colors_toggle)
 	var grid = GridContainer.new()
+	colors_grid = grid
+	grid.visible = colors_open
 	grid.columns = 4 # two parts to a row, so the longer lists stay compact
 	grid.add_constant_override("hseparation", 8)
 	grid.add_constant_override("vseparation", 4)
@@ -1663,6 +1676,22 @@ func _update_part_rows():
 		pickers[part[0]].visible = shown
 		picker_labels[part[0]].visible = shown
 		picker_labels[part[0]].text = info.get("labels", {}).get(part[0], part[1])
+	_update_colors_toggle()
+
+
+func _on_toggle_colors():
+	colors_open = not colors_open
+	_update_colors_toggle()
+	_save_config()
+	if menu_open:
+		call_deferred("_place_menu")
+
+
+func _update_colors_toggle():
+	if colors_grid != null:
+		colors_grid.visible = colors_open
+	if colors_toggle != null:
+		colors_toggle.text = ("-  " if colors_open else "+  ") + "Colours (%d)" % SPECIES[species].get("parts", []).size()
 
 
 func _on_species(kind):
@@ -1894,6 +1923,8 @@ func _load_config():
 		paw.rect_position = Vector2(float(data["x"]), float(data["y"]))
 	if data.has("show"):
 		show_pet = bool(data["show"])
+	if data.has("colors_open"):
+		colors_open = bool(data["colors_open"])
 	if data.has("palettes_open"):
 		palettes_open = bool(data["palettes_open"])
 	if data.has("howl"):
@@ -1935,5 +1966,5 @@ func _save_config():
 	var file = File.new()
 	if file.open(CONFIG_PATH, File.WRITE) != OK:
 		return
-	file.store_string(to_json({"x": paw.rect_position.x, "y": paw.rect_position.y, "show": show_pet, "species": species, "howl": howl_on, "cooldown": answer_cooldown, "size": pet_size, "name": pet_name, "colors": colors, "palettes": palettes, "palettes_open": palettes_open}))
+	file.store_string(to_json({"x": paw.rect_position.x, "y": paw.rect_position.y, "show": show_pet, "species": species, "howl": howl_on, "cooldown": answer_cooldown, "size": pet_size, "name": pet_name, "colors": colors, "palettes": palettes, "palettes_open": palettes_open, "colors_open": colors_open}))
 	file.close()
