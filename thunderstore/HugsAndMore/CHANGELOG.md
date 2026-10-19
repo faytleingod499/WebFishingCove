@@ -1,3 +1,6 @@
+## 1.2.6
+- High five: you both step a little to the side so your heads pass each other instead of bumping, and your right hands meet in the middle.
+
 ## 1.2.5
 - The description now notes that this mod was created with the assistance of AI.
 

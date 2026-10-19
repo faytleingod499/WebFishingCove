@@ -15,7 +15,7 @@ extends Node
 # Everything goes through the Steam lobby member data ("hugsandmore"), so every player with the mod sees
 # it. Players without the mod see nothing unusual.
 
-const VERSION = "1.2.5"
+const VERSION = "1.2.6"
 const SYNC_KEY = "hugsandmore"   # "1;<seq>;<ask|yes>;<emote>;<target steam id>;<the seq it answers>"
 const SKELETON_PATH = "body/player_body/Armature/Skeleton"
 const POPUP_ID = "HUGSANDMORE"
@@ -584,14 +584,20 @@ func _hug_one(me_node, other, dir, mid, gap, s_me, s_other, sway, w, tilt_side):
 
 # A high five: both face each other an arm's length apart, raise their right hands and slap them
 # together between them, a little above the shorter one's head, then let them drop again.
+# The heads are huge (about 1.15 wide at size 1), so face to face they would bump: each steps to its own
+# left, the way two people line up their right hands, so the heads pass side by side and the right
+# hands meet in the middle.
+const FIVE_SIDESTEP = 0.60   # times my size: half a head and a bit, so the two heads clear each other
+const FIVE_GAP = 0.22        # how far apart they stand, front to back (times their size): close, so the arms reach
+const FIVE_RAISE = 0.05      # how far above the shoulders the hands meet (times the smaller size)
 func _pose_highfive(p):
 	var frame = _pair_frame(p)
 	var dir = frame[0]
 	var mid = frame[1]
 	var sa = _player_size(p["pa"])
 	var sb = _player_size(p["pb"])
-	var gap = 0.46 * (sa + sb) / 2.0
-	var height = (_shoulder_y(p["pa"]) + _shoulder_y(p["pb"])) / 2.0 + 0.16 * min(sa, sb)
+	var gap = FIVE_GAP * (sa + sb) / 2.0
+	var height = (_shoulder_y(p["pa"]) + _shoulder_y(p["pb"])) / 2.0 + FIVE_RAISE * min(sa, sb)
 	# no higher than the shorter one can reach, the taller one reaches down to meet them
 	var short = p["pa"] if sa <= sb else p["pb"]
 	height = min(height, _shoulder_y(short) + 0.3 * min(sa, sb))
@@ -608,10 +614,10 @@ func _pose_highfive(p):
 
 
 func _five_one(me_node, dir, mid, gap, s_me, contact, swing, bounce, w):
-	var body = _place_body(me_node, dir, mid, gap, 0.0, w)
+	var left = Vector3.UP.cross(dir).normalized()
+	var body = _place_body(me_node, dir, mid + left * FIVE_SIDESTEP * s_me, gap, 0.0, w)
 	if body == null:
 		return
-	var left = Vector3.UP.cross(dir).normalized()
 	var right = -left
 	# from up by my own shoulder, swung across to the meeting point
 	var spot = body["spot"]
