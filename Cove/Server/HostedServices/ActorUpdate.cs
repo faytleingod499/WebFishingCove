@@ -70,6 +70,19 @@ namespace Cove.Server.HostedServices
             {
                 updateI++;
 
+                // the command list for the HUD's help button, every few seconds (it only writes when something changed)
+                if (updateI == 1)
+                {
+                    try
+                    {
+                        server.PublishCommandList();
+                    }
+                    catch (Exception e)
+                    {
+                        _logger.LogError("Could not publish the command list: " + e.Message);
+                    }
+                }
+
                 // a plugin that throws in onUpdate must not stop the actors (rain clouds etc) from being updated
                 foreach (PluginInstance plugin in server.loadedPlugins.ToList())
                 {
