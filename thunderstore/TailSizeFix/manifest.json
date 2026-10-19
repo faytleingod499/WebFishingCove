@@ -2,7 +2,7 @@
     "name": "Tail_Size_Fix",
     "version_number": "1.0.0",
     "website_url": "https://github.com/faytleingod499/WebFishingCove",
-    "description": "Tails grow and shrink with the player. Fixes every player's tail, client side, on any server.",
+    "description": "Tails grow and shrink with the player. Fixes every player's tail, client side, on any server. This mod was created with the assistance of AI.",
     "dependencies": [
         "NotNet-GDWeave-2.0.14"
     ]

@@ -2,6 +2,8 @@
 
 When a player grows or shrinks, everything about them changes size except their tail. Tiny players end up with a huge tail and big players with a tiny one.
 
+*This mod was created with the assistance of AI.*
+
 This mod makes every tail grow and shrink with its player.
 
 - Fixes every player you can see, whether or not they have the mod.

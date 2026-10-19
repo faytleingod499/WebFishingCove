@@ -1,8 +1,8 @@
 {
     "name": "EtherPets",
-    "version_number": "2.9.7",
+    "version_number": "2.9.8",
     "website_url": "https://github.com/faytleingod499/WebFishingCove",
-    "description": "A pet wolf, cat or raccoon that follows you around, in colours you pick. Pet it, name it, sit with it. Other players with the mod see your pet too. Works on any server.",
+    "description": "A pet wolf, cat or raccoon that follows you around, in colours you pick. Pet it, name it, sit with it. Other players with the mod see your pet too. Works on any server. This mod was created with the assistance of AI.",
     "dependencies": [
         "NotNet-GDWeave-2.0.14"
     ]

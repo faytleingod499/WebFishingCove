@@ -1,3 +1,6 @@
+## 1.2.5
+- The description now notes that this mod was created with the assistance of AI.
+
 ## 1.2.4
 - Fixed: the kiss sound was too quiet to hear. Kiss and high five now play the game's own sounds through
   both players, just like the game's K emote and punch.

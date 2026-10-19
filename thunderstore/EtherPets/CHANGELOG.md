@@ -1,3 +1,6 @@
+## 2.9.8
+- The description now notes that this mod was created with the assistance of AI.
+
 ## 2.9.7
 - The cat curled in your lap keeps its front paws still while it breathes.
 

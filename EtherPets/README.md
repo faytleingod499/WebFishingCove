@@ -4,6 +4,8 @@ A little pet, a **wolf**, a **cat** or a **raccoon**, that follows you around in
 (keeping up at any speed), waits beside you and sits down when you stand still for a while. Works on
 any server.
 
+*This mod was created with the assistance of AI.*
+
 ## Install
 
 Needs [GDWeave](https://github.com/NotNite/GDWeave). Copy the `EtherPets` folder (with

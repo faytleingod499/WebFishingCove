@@ -2,6 +2,8 @@
 
 Emotes for two players who both have the mod: **hug**, **high five** and **kiss**, with more to come.
 
+*This mod was created with the assistance of AI.*
+
 Walk up to another player who has Hugs and More: a small **F  Interact** tag (in the Wolfpark HUD's glass
 style) floats above them. Press **F** to open a small menu and pick an emote. They get an invitation,
 "<name> wants a hug!", and join in with **Y** or the button (or "No thanks").

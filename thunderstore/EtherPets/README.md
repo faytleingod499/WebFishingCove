@@ -4,6 +4,8 @@ A little pet that follows you around WEBFISHING: a **wolf**, a **cat** or a **ra
 It keeps up with you at any speed, waits beside you, and settles down when you stand still for a while.
 Works on any server.
 
+*This mod was created with the assistance of AI.*
+
 ## The pets
 
 - **Wolf**: trots after you, lies down beside you when you sit, gives a happy whine when petted and

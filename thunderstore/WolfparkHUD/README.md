@@ -2,6 +2,8 @@
 
 The player panel for **Ether's Wolf Park** and other servers running the Cove **Feed** plugin.
 
+*This mod was created with the assistance of AI.*
+
 It adds a small panel at the top left with:
 
 - your **wolf coin** balance,

@@ -2,6 +2,8 @@
 
 Emotes for two players who both have the mod: **hug**, **high five** and **kiss**, with more to come.
 
+*This mod was created with the assistance of AI.*
+
 ## How to use it
 
 1. Walk up to another player who also has Hugs and More. A small **F  Interact** tag appears above them.
