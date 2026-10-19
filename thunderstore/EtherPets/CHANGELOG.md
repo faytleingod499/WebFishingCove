@@ -1,3 +1,6 @@
+## 2.9.2
+- Fixed the raccoon facing the wrong way and floating far from your head (its model was off-centre in 2.9.0 and 2.9.1).
+
 ## 2.9.1
 - The wolf no longer leans slightly to one side.
 
