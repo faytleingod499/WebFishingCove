@@ -1,3 +1,6 @@
+## 1.2.2
+- You sit on top of the swing seat instead of halfway through it.
+
 ## 1.2.1
 - The swing seats are blue.
 
