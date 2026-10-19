@@ -1,3 +1,6 @@
+## 2.9.5
+- The wolf lying beside you gives a gentle tail wag.
+
 ## 2.9.4
 - The wolf lying beside you breathes more gently: its front paws stay on the ground, and its head and tail move less.
 
