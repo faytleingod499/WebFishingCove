@@ -15,3 +15,6 @@ Cove/worlds/main_zone.tscn
 /.idea
 CoveServer.sln.DotSettings.user
 thunderstore-out/
+
+build/
+dist/

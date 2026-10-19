@@ -7,8 +7,13 @@ rem Copy the files you want over your running server, keeping your own .cfg and 
 dotnet publish Cove\Cove.csproj -c Release -o dist
 if errorlevel 1 goto failed
 
+rem Each plugin is built into its own folder under "build" and only the plugin's own dll is copied to dist\plugins.
+rem (Building straight into dist\plugins also put a second copy of the server and its libraries there.)
+if not exist dist\plugins mkdir dist\plugins
 for %%P in (AutoMessages ChalkObserver ChalkPersist ChalkSaves ChatTriggers Feed Greetings ClearChalk DiscordBridge) do (
-    dotnet build Cove.%%P -c Release -o dist\plugins
+    dotnet build Cove.%%P -c Release -o build\%%P
+    if errorlevel 1 goto failed
+    copy /y build\%%P\Cove.%%P.dll dist\plugins\ >nul
     if errorlevel 1 goto failed
 )
 
