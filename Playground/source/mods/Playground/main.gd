@@ -22,7 +22,7 @@ extends Node
 # <n>;<target>;<t> is the last tag that player made: tag number n made <target> "it", <t> seconds into the
 # round (by the tagger's clock). The starter's tag 0 is the first "it". The highest number is "it" now.
 
-const VERSION = "1.1.0"
+const VERSION = "1.2.0"
 const SYNC_KEY = "playground"
 const SKELETON_PATH = "body/player_body/Armature/Skeleton"
 const POPUP_ID = "PLAYGROUND"
@@ -100,6 +100,9 @@ var star_dragging = false
 var press_pos = Vector2()
 var drag_offset = Vector2()
 var theme_applied = false
+var themed = []              # more of my windows (the swing's) that get the game's font
+var swing                    # the swing set (swing.gd)
+var menu_swing
 
 
 func _ready():
@@ -109,6 +112,10 @@ func _ready():
 	_make_textures()
 	_build_ui()
 	_load_config()
+	swing = load("res://mods/Playground/swing.gd").new()
+	swing.name = "Swing"
+	swing.main = self
+	add_child(swing)
 
 
 func _exit_tree():
@@ -818,8 +825,9 @@ func _update_menu():
 	var busy = my_round != ""
 	menu_tag.disabled = busy
 	menu_leave.visible = busy
+	menu_swing.text = "Pick up your swing set" if swing != null and swing.has_set() else "Place a swing set"
 	if not busy:
-		menu_status.text = "Start a game with everyone who has Playground."
+		menu_status.text = "Play with everyone who has Playground."
 	elif my_role == "open":
 		menu_status.text = "Waiting for players to join..."
 	else:
@@ -893,7 +901,7 @@ func _refresh_button():
 		theme_applied = true
 		var main = hud.get_node_or_null("main")
 		if main != null and main.theme != null:
-			for control in [star_button, menu, invite_panel, wait_panel, bar, big, results, toast]:
+			for control in [star_button, menu, invite_panel, wait_panel, bar, big, results, toast] + themed:
 				control.theme = main.theme
 	if not show and menu.visible:
 		_close_menu()
@@ -984,6 +992,8 @@ func _build_ui():
 	column.add_child(menu_tag)
 	menu_leave = _button("Leave the round", "_on_leave_pressed")
 	column.add_child(menu_leave)
+	menu_swing = _button("Place a swing set", "_on_swing_pressed")
+	column.add_child(menu_swing)
 
 	# "<name> is starting a round of Tag!  [Join (Y) 9s]  [No thanks]"
 	invite_panel = _panel(0.75)
@@ -1053,6 +1063,14 @@ func _build_ui():
 	toast.grow_horizontal = Control.GROW_DIRECTION_BOTH
 	toast.align = Label.ALIGN_CENTER
 	layer.add_child(toast)
+
+
+func _on_swing_pressed():
+	if swing.has_set():
+		swing.remove_set()
+	else:
+		swing.place_set()
+	_close_menu()
 
 
 func _on_leave_pressed():
