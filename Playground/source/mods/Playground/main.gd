@@ -22,7 +22,7 @@ extends Node
 # <n>;<target>;<t> is the last tag that player made: tag number n made <target> "it", <t> seconds into the
 # round (by the tagger's clock). The starter's tag 0 is the first "it". The highest number is "it" now.
 
-const VERSION = "1.2.3"
+const VERSION = "1.2.4"
 const SYNC_KEY = "playground"
 const SKELETON_PATH = "body/player_body/Armature/Skeleton"
 const POPUP_ID = "PLAYGROUND"

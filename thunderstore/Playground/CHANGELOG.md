@@ -1,3 +1,6 @@
+## 1.2.4
+- Whoever is on a swing leans with the seat, so they stay square to the chains as it swings.
+
 ## 1.2.3
 - A new swing set goes up right in front of you, so it's easy to put exactly where you want it.
 

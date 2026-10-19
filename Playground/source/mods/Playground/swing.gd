@@ -80,6 +80,9 @@ func _ready():
 
 
 func _exit_tree():
+	for id in tilted.keys():
+		_untilt(tilted[id])
+	tilted = {}
 	if seated_owner != 0:
 		_stand_up(false)
 	my_set_text = ""
@@ -143,12 +146,20 @@ func _process(delta):
 	_update_hud()
 
 
+var tilted = {}              # riders whose body I'm leaning with their seat: steam id -> skeleton
+
 func _physics_process(delta):
 	var me = _my_player()
+	var now = {}
 	for owner in sets.keys():
-		_animate_set(owner, me, delta)
+		_animate_set(owner, me, delta, now)
 	if seated_owner != 0:
 		_ride(me, delta)
+	# whoever got off sits up straight again
+	for id in tilted.keys():
+		if not now.has(id):
+			_untilt(tilted[id])
+	tilted = now
 
 
 func _read(steam):
@@ -299,7 +310,7 @@ func _seat_point(s, seat, angle):
 	return root.global_transform.xform(local)
 
 
-func _animate_set(owner, me, delta):
+func _animate_set(owner, me, delta, now):
 	var s = sets[owner]
 	if not is_instance_valid(s["node"]):
 		return
@@ -324,6 +335,45 @@ func _animate_set(owner, me, delta):
 					angle = clamp(atan2(d.x, d.y), -deg2rad(85), deg2rad(85))
 		s["angles"][seat] = lerp_angle(s["angles"][seat], angle, clamp(delta * 18.0, 0.0, 1.0))
 		s["pivots"][seat].rotation = Vector3(s["angles"][seat], 0, 0)
+		# the one sitting leans with the seat
+		var rider_id = 0
+		if seated_owner == owner and seated_seat == seat:
+			rider_id = _my_id()
+		elif seats.has(key):
+			rider_id = seats[key]
+		if rider_id != 0 and here:
+			var rider = me if rider_id == _my_id() else _player_of(rider_id)
+			var sk = _tilt(rider, s, seat, s["angles"][seat])
+			if sk != null:
+				now[rider_id] = sk
+
+
+# The body turns with the seat around where it sits on it, so a rider stays square to the ropes. Done with
+# a pose on the pelvis (like the hugs), so the game's player, camera and collision are left alone.
+func _tilt(rider, s, seat, angle):
+	if rider == null or not is_instance_valid(rider):
+		return null
+	var sk = rider.get_node_or_null(SKELETON_PATH)
+	if sk == null:
+		return null
+	var pelvis = sk.find_bone("pelvis")
+	if pelvis < 0:
+		return null
+	var contact = _seat_point(s, seat, angle)
+	var axis = s["node"].global_transform.basis.x.normalized()
+	var turn = Transform(Basis(), contact) * Transform(Basis(axis, angle), Vector3()) * Transform(Basis(), -contact)
+	var W = sk.global_transform
+	var rebase = W.affine_inverse() * turn * W
+	sk.set_bone_global_pose_override(pelvis, rebase * sk.get_bone_global_pose_no_override(pelvis), 1.0, true)
+	return sk
+
+
+func _untilt(sk):
+	if sk == null or not is_instance_valid(sk):
+		return
+	var pelvis = sk.find_bone("pelvis")
+	if pelvis >= 0:
+		sk.set_bone_global_pose_override(pelvis, Transform(), 0.0, false)
 
 
 # --- sitting, pumping, letting go ---
