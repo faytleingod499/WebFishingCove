@@ -6,6 +6,7 @@ using Cove.Server;
 using Cove.Server.Actor;
 using Cove.Server.Chalk;
 using Cove.Server.Plugins;
+using Steamworks;
 
 /// <summary>
 /// Lets players save a chalk canvas under a name and put it back on any canvas later.
@@ -18,6 +19,7 @@ using Cove.Server.Plugins;
 ///   !chalkshare &lt;name&gt; &lt;player&gt;  offers a copy of one of your saves to a player who is online
 ///   !chalkaccept [new name]     takes the copy that was offered to you
 ///   !chalkdecline               turns the offer down
+///   !chalkowners [off], !chalkbrowse &lt;Steam ID&gt;   admins only, used quietly by the Wolfpark HUD's Chalk menu
 ///
 /// Admins can add a player (name or Steam ID) to the end of any of these to use that player's saves.
 ///
@@ -73,6 +75,22 @@ public class ChalkSaves : CovePlugin
     private readonly Dictionary<ulong, Offer> offers = new();
     private readonly Dictionary<ulong, long> lastShare = new();
 
+    // what the Wolfpark HUD mod reads to show the saves in a menu (see PublishLobbyData)
+    private const long PublishEveryMs = 3000;
+    private volatile bool publishDirty = true;
+    private long nextPublishTick;
+    private ulong publishedLobby;
+    private string publishedInfo = "";
+    private readonly Dictionary<ulong, string> publishedLists = new();
+    private readonly Dictionary<ulong, string> publishedOffers = new();
+
+    // admins looking at everyone's saves in the HUD: admin -> the player whose saves they opened (0 for none)
+    private readonly Dictionary<ulong, ulong> adminViews = new();
+    private readonly Dictionary<ulong, string> publishedOwners = new();
+    private readonly Dictionary<ulong, string> publishedBrowse = new();
+    private readonly Dictionary<ulong, string> ownerNames = new(); // Steam ID -> name, read once from a save
+    private const int MaxOwnersListed = 120;
+
     public ChalkSaves(CoveServer server) : base(server) { }
 
     public override void onInit()
@@ -103,6 +121,11 @@ public class ChalkSaves : CovePlugin
         Register("chalkshare", "Offers a copy of a save to a player | Usage: !chalkshare <name> <player>", ShareSave);
         Register("chalkaccept", "Takes the chalk save somebody offered you | Usage: !chalkaccept [new name]", AcceptOffer);
         Register("chalkdecline", "Turns down the chalk save somebody offered you", DeclineOffer);
+        // used quietly by the HUD's admin list, they answer through the lobby data and not in chat
+        Register("chalkowners", "Shows every player's chalk saves in the HUD | Usage: !chalkowners [off]", ShowOwners);
+        Register("chalkbrowse", "Opens one player's chalk saves in the HUD | Usage: !chalkbrowse <Steam ID>", BrowseOwner);
+        SetCommandAccess("chalkowners", CommandAccess.Admin);
+        SetCommandAccess("chalkbrowse", CommandAccess.Admin);
 
         // with admin only access set in chalksaves.txt, the other players don't see these in !help
         if (saveAdminsOnly)
@@ -116,8 +139,176 @@ public class ChalkSaves : CovePlugin
         base.onEnd();
         lock (fileLock)
             offers.Clear();
-        foreach (string command in new[] { "chalksave", "chalkload", "chalklist", "chalkdelete", "chalkshare", "chalkaccept", "chalkdecline" })
+        foreach (string command in new[] { "chalksave", "chalkload", "chalklist", "chalkdelete", "chalkshare", "chalkaccept", "chalkdecline", "chalkowners", "chalkbrowse" })
             ParentServer.UnregisterCommand(command);
+        ClearLobbyData();
+    }
+
+    public override void onPlayerJoin(WFPlayer player)
+    {
+        base.onPlayerJoin(player);
+        publishDirty = true;
+    }
+
+    public override void onPlayerLeave(WFPlayer player)
+    {
+        base.onPlayerLeave(player);
+        publishDirty = true;
+    }
+
+    public override void onUpdate()
+    {
+        PublishLobbyData();
+    }
+
+    // ---- the Wolfpark HUD mod ----
+
+    // The HUD mod has a Chalk menu. It finds what to show in the Steam lobby data:
+    //   wp_chalk         = "saveAll,loadAll,maxSaves,loadCooldown"   (1 = everyone may, 0 = admins only)
+    //   wp_cs<SteamID>   = that player's save names, "name,name,name"
+    //   wp_co<SteamID>   = a share waiting for that player, "from~name", or empty
+    // The mod then uses the normal commands, so every check above still applies.
+    private void PublishLobbyData()
+    {
+        long now = Environment.TickCount64;
+        if (!publishDirty && now < nextPublishTick)
+            return;
+        publishDirty = false;
+        nextPublishTick = now + PublishEveryMs;
+
+        try
+        {
+            CSteamID lobby = ParentServer.SteamLobby;
+            if (!lobby.IsValid())
+                return;
+
+            if (publishedLobby != lobby.m_SteamID)
+            {
+                publishedLists.Clear();
+                publishedOffers.Clear();
+                publishedOwners.Clear();
+                publishedBrowse.Clear();
+                publishedInfo = "";
+                publishedLobby = lobby.m_SteamID;
+            }
+
+            string info = $"{(saveAdminsOnly ? 0 : 1)},{(loadAdminsOnly ? 0 : 1)},{maxSaves},{loadCooldownSeconds}";
+            if (info != publishedInfo)
+            {
+                SteamMatchmaking.SetLobbyData(lobby, "wp_chalk", info);
+                publishedInfo = info;
+            }
+
+            var lists = new Dictionary<ulong, string>();
+            var offerTexts = new Dictionary<ulong, string>();
+            lock (fileLock)
+            {
+                foreach (WFPlayer player in GetAllPlayers())
+                {
+                    ulong id = player.SteamId.m_SteamID;
+                    string dir = FolderFor(id);
+                    var names = Directory.Exists(dir)
+                        ? Directory.GetFiles(dir, "*.json").Select(f => Path.GetFileNameWithoutExtension(f))
+                            .Where(n => TryName(n, out string clean) && clean == n)
+                            .OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToList()
+                        : new List<string>();
+                    lists[id] = string.Join(",", names);
+
+                    string offerText = "";
+                    if (offers.TryGetValue(id, out Offer? offer))
+                    {
+                        if (now > offer.ExpiresTick)
+                            offers.Remove(id);
+                        else
+                            offerText = $"{offer.FromName.Replace('~', ' ').Replace(',', ' ')}~{offer.Name}";
+                    }
+                    offerTexts[id] = offerText;
+                }
+            }
+
+            Publish(lobby, "wp_cs", lists, publishedLists);
+            Publish(lobby, "wp_co", offerTexts, publishedOffers);
+
+            // for admins with the HUD's "All players" list open:
+            //   wp_ca<admin> = id~name~count;...   wp_cb<admin> = "id~name,name" for the player they opened
+            var ownersFor = new Dictionary<ulong, string>();
+            var browseFor = new Dictionary<ulong, string>();
+            lock (fileLock)
+            {
+                var onlineAdmins = GetAllPlayers().Where(p => IsPlayerAdmin(p)).Select(p => p.SteamId.m_SteamID).ToHashSet();
+                foreach (ulong gone in adminViews.Keys.Where(id => !onlineAdmins.Contains(id)).ToList())
+                    adminViews.Remove(gone);
+
+                string owners = adminViews.Count > 0 ? OwnersText() : "";
+                foreach (var view in adminViews)
+                {
+                    ownersFor[view.Key] = owners;
+                    if (view.Value == 0)
+                        continue;
+                    string dir = FolderFor(view.Value);
+                    var names = Directory.Exists(dir)
+                        ? Directory.GetFiles(dir, "*.json").Select(f => Path.GetFileNameWithoutExtension(f))
+                            .Where(n => TryName(n, out string clean) && clean == n)
+                            .OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToList()
+                        : new List<string>();
+                    browseFor[view.Key] = $"{view.Value}~{string.Join(",", names)}";
+                }
+            }
+            Publish(lobby, "wp_ca", ownersFor, publishedOwners);
+            Publish(lobby, "wp_cb", browseFor, publishedBrowse);
+        }
+        catch (Exception e)
+        {
+            Log($"Could not update the HUD data: {e.Message}");
+        }
+    }
+
+    private static void Publish(CSteamID lobby, string prefix, Dictionary<ulong, string> wanted, Dictionary<ulong, string> published)
+    {
+        foreach (var pair in wanted)
+        {
+            if (published.TryGetValue(pair.Key, out string? old) && old == pair.Value)
+                continue;
+            SteamMatchmaking.SetLobbyData(lobby, prefix + pair.Key, pair.Value);
+            published[pair.Key] = pair.Value;
+        }
+
+        // players who left, so the lobby data does not grow forever
+        foreach (ulong gone in published.Keys.Where(id => !wanted.ContainsKey(id)).ToList())
+        {
+            SteamMatchmaking.SetLobbyData(lobby, prefix + gone, "");
+            published.Remove(gone);
+        }
+    }
+
+    private void ClearLobbyData()
+    {
+        try
+        {
+            CSteamID lobby = ParentServer.SteamLobby;
+            if (lobby.IsValid() && publishedLobby == lobby.m_SteamID)
+            {
+                SteamMatchmaking.SetLobbyData(lobby, "wp_chalk", "");
+                foreach (ulong id in publishedLists.Keys)
+                    SteamMatchmaking.SetLobbyData(lobby, "wp_cs" + id, "");
+                foreach (ulong id in publishedOffers.Keys)
+                    SteamMatchmaking.SetLobbyData(lobby, "wp_co" + id, "");
+                foreach (ulong id in publishedOwners.Keys)
+                    SteamMatchmaking.SetLobbyData(lobby, "wp_ca" + id, "");
+                foreach (ulong id in publishedBrowse.Keys)
+                    SteamMatchmaking.SetLobbyData(lobby, "wp_cb" + id, "");
+            }
+        }
+        catch (Exception e)
+        {
+            Log($"Could not clear the HUD data: {e.Message}");
+        }
+        publishedLists.Clear();
+        publishedOffers.Clear();
+        publishedOwners.Clear();
+        publishedBrowse.Clear();
+        publishedInfo = "";
+        publishedLobby = 0;
     }
 
     // saves from the first version of this plugin sat directly in ChalkSaves, move them into their owner's folder
@@ -152,6 +343,7 @@ public class ChalkSaves : CovePlugin
                 try
                 {
                     run(player, args);
+                    publishDirty = true; // the HUD menu shows the change right away
                 }
                 catch (Exception e)
                 {
@@ -525,6 +717,80 @@ public class ChalkSaves : CovePlugin
         SendPlayerChatMessage(player, had ? "Offer declined." : "Nobody has offered you a chalk save.");
     }
 
+    private void ShowOwners(WFPlayer player, string[] args)
+    {
+        if (!IsPlayerAdmin(player))
+            return;
+        ulong id = player.SteamId.m_SteamID;
+        lock (fileLock)
+        {
+            if (args.Length > 0 && args[0].Equals("off", StringComparison.OrdinalIgnoreCase))
+                adminViews.Remove(id);
+            else if (!adminViews.ContainsKey(id))
+                adminViews[id] = 0;
+        }
+    }
+
+    private void BrowseOwner(WFPlayer player, string[] args)
+    {
+        if (!IsPlayerAdmin(player))
+            return;
+        ulong owner = 0;
+        if (args.Length > 0 && !ulong.TryParse(args[0], out owner))
+            return;
+        lock (fileLock)
+            adminViews[player.SteamId.m_SteamID] = owner;
+    }
+
+    // every player who has a folder of saves:  id~name~count;id~name~count  (most recently saved first)
+    private string OwnersText()
+    {
+        var online = new Dictionary<ulong, string>();
+        foreach (WFPlayer p in GetAllPlayers())
+            online[p.SteamId.m_SteamID] = p.Username;
+        var entries = new List<(ulong Id, string Name, int Count, DateTime Last)>();
+        foreach (string dir in Directory.GetDirectories(folder))
+        {
+            if (!ulong.TryParse(Path.GetFileName(dir), out ulong id))
+                continue; // _backups
+            string[] files = Directory.GetFiles(dir, "*.json");
+            if (files.Length == 0)
+                continue;
+            if (!online.TryGetValue(id, out string? name))
+                name = OwnerName(id, files);
+            DateTime last = files.Max(f => File.GetLastWriteTimeUtc(f));
+            entries.Add((id, name, files.Length, last));
+        }
+
+        var shown = entries.OrderByDescending(e => e.Last).Take(MaxOwnersListed);
+        return string.Join(";", shown.Select(e => $"{e.Id}~{CleanName(e.Name)}~{e.Count}"));
+    }
+
+    // the name in a save file, which is near its start, so a big save is never read whole
+    private string OwnerName(ulong id, string[] files)
+    {
+        if (ownerNames.TryGetValue(id, out string? known))
+            return known;
+        string name = id.ToString();
+        try
+        {
+            using var stream = File.OpenRead(files[0]);
+            var buffer = new byte[512];
+            int read = stream.Read(buffer, 0, buffer.Length);
+            Match m = Regex.Match(Encoding.UTF8.GetString(buffer, 0, read), "\"ownerName\":\"((?:[^\"\\\\]|\\\\.)*)\"");
+            if (m.Success)
+                name = JsonSerializer.Deserialize<string>("\"" + m.Groups[1].Value + "\"") ?? name;
+        }
+        catch
+        {
+            // keep the Steam ID
+        }
+        ownerNames[id] = name;
+        return name;
+    }
+
+    private static string CleanName(string text) => text.Replace('~', ' ').Replace(';', ' ').Replace(',', ' ');
+
     // an online player by name, fisher ID or Steam ID
     private WFPlayer? FindOnline(string ident)
     {
@@ -736,6 +1002,9 @@ public class ChalkSaves : CovePlugin
             "#    !chalkshare <name> <player> offers a copy of a save to a player who is online",
             "#    !chalkaccept [new name]     takes the copy that was offered to you",
             "#    !chalkdecline               turns the offer down",
+            "#",
+            "#  The Wolfpark HUD mod shows all of this in its Chalk menu. Admins also see",
+            "#  every player's saves there (it uses !chalkowners and !chalkbrowse).",
             "#",
             "#  A shared save is only an offer, it lands in the other player's folder when",
             "#  they type !chalkaccept (within 2 minutes), so nobody can fill your saves.",
