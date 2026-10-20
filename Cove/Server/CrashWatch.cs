@@ -348,6 +348,7 @@ namespace Cove.Server
 
         private static void Watch()
         {
+            int beats = 0;
             while (true)
             {
                 try
@@ -355,6 +356,10 @@ namespace Cove.Server
                     Thread.Sleep(1000);
                     Heartbeat();
                     CheckLoops();
+                    // Windows keeps the blackbox in memory and writes it out whenever it likes, which can be hours
+                    // later. Writing it out every 2 seconds means a power cut or blue screen loses at most that much.
+                    if (++beats % 2 == 0)
+                        FlushBlackbox();
                 }
                 catch (Exception e)
                 {
@@ -532,6 +537,7 @@ namespace Cove.Server
             }
 
             DateTime lastRunStart = DateTime.MinValue;
+            DateTime lastAliveLocal = DateTime.MinValue;
             string blackbox = Path.Combine(folder, "blackbox.bin");
             byte[]? data = null;
             if (File.Exists(blackbox))
@@ -541,6 +547,7 @@ namespace Cove.Server
                 {
                     lastRunStart = new DateTime(BitConverter.ToInt64(data, 24), DateTimeKind.Utc).ToLocalTime();
                     var lastAlive = new DateTime(BitConverter.ToInt64(data, 16), DateTimeKind.Utc);
+                    lastAliveLocal = lastAlive.ToLocalTime();
                     report.AppendLine();
                     report.AppendLine($"Last sign of life: {lastAlive.ToLocalTime():yyyy-MM-dd HH:mm:ss} (the watchdog writes one every second)");
                     report.AppendLine();
@@ -552,6 +559,25 @@ namespace Cove.Server
                 {
                     data = null;
                 }
+            }
+
+            // Did the whole PC go down? Then Windows never wrote out the last part of the files: stats.csv ends long
+            // after the blackbox's last sign of life, and/or has a stretch of zero bytes where unwritten data should be.
+            bool zeroBytes = CleanStats();
+            DateTime lastStats = LastStatsTime();
+            bool blackboxBehind = lastAliveLocal > DateTime.MinValue && lastStats > lastAliveLocal.AddSeconds(90);
+            if (zeroBytes || blackboxBehind)
+            {
+                report.AppendLine();
+                report.AppendLine("THE WHOLE PC PROBABLY WENT DOWN (power cut, blue screen or a forced restart), not just the server:");
+                if (blackboxBehind)
+                    report.AppendLine($"  stats.csv was still being written until {lastStats:yyyy-MM-dd HH:mm:ss}, long after the blackbox's last saved sign of life,");
+                if (zeroBytes)
+                    report.AppendLine("  stats.csv had a stretch of empty (zero) bytes: Windows had made room for data it never got to write,");
+                report.AppendLine("  which only happens when Windows itself stops without saving. The server most likely ended around " +
+                    $"{(lastStats > lastAliveLocal ? lastStats : lastAliveLocal):yyyy-MM-dd HH:mm:ss}.");
+                report.AppendLine("  Look in Event Viewer > Windows Logs > System around that time: Kernel-Power 41 (power or hard reset),");
+                report.AppendLine("  BugCheck 1001 (blue screen, with its error code) or EventLog 6008 (unexpected shutdown).");
             }
 
             // what run-server.bat saw when the process ended
@@ -748,7 +774,47 @@ namespace Cove.Server
             string path = Path.Combine(folder, "stats.csv");
             if (!File.Exists(path))
                 return new List<string>();
-            return File.ReadLines(path).Skip(1).TakeLast(count).ToList();
+            return File.ReadLines(path).Skip(1).Select(l => l.Trim('\0', ' ')).Where(l => l.Length > 0).TakeLast(count).ToList();
+        }
+
+        // the time of the newest line in stats.csv
+        private static DateTime LastStatsTime()
+        {
+            try
+            {
+                string? last = TailStats(1).FirstOrDefault();
+                if (last != null && DateTime.TryParse(last.Split(',')[0], System.Globalization.CultureInfo.InvariantCulture,
+                        System.Globalization.DateTimeStyles.None, out DateTime time))
+                    return time;
+            }
+            catch { }
+            return DateTime.MinValue;
+        }
+
+        // Takes out the zero bytes an unclean Windows shutdown leaves in stats.csv; true when there were any
+        private static bool CleanStats()
+        {
+            try
+            {
+                string path = Path.Combine(folder, "stats.csv");
+                if (!File.Exists(path))
+                    return false;
+                byte[] bytes = File.ReadAllBytes(path);
+                if (Array.IndexOf(bytes, (byte)0) < 0)
+                    return false;
+                byte[] clean = bytes.Where(b => b != 0).ToArray();
+                File.WriteAllBytes(path, clean);
+                // the line after the gap was glued onto the end of the cut off one, put it on its own line again
+                string text = File.ReadAllText(path);
+                string fixedText = System.Text.RegularExpressions.Regex.Replace(text, @"(?<!^|\n)(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},)", "\n$1");
+                if (fixedText != text)
+                    File.WriteAllText(path, fixedText);
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         private static string PlayersAndPlugins()
