@@ -25,6 +25,15 @@ long epoch = new DateTimeOffset(DateTime.UtcNow).ToUnixTimeSeconds();
 // Crash Watch first, so even a crash during startup is recorded (and a crash of the last run gets its report now)
 CrashWatch.Start();
 
+// a second copy started from the same folder (twice-clicked, or the startup task while the server is up) would fight the
+// running server over the Steam lobby and its files, so it stops here. Exit code 0, so run-server.bat doesn't restart it.
+if (CrashWatch.AnotherServerRunning)
+{
+    Console.WriteLine("The server is already running from this folder, this copy won't start. Closing in 10 seconds.");
+    Thread.Sleep(10_000);
+    Environment.Exit(0);
+}
+
 var serverLogger = new LoggerConfiguration()
     .WriteTo.Console()
     .WriteTo.File($"logs/log-{epoch}.txt") // Daily rolling logs

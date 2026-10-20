@@ -87,6 +87,28 @@ namespace Cove.Server
         private static long lastErrors;
         private static long lastExceptions;
 
+        /// <summary>True when Start found this server already running from the same folder (see Program.cs).</summary>
+        public static bool AnotherServerRunning;
+
+        // running.flag says "started <time> pid <id>": is that process still alive and a copy of this program?
+        private static bool FlagOwnerAlive()
+        {
+            try
+            {
+                string flag = File.ReadAllText(flagPath);
+                var m = System.Text.RegularExpressions.Regex.Match(flag, @"pid (\d+)");
+                if (!m.Success || !int.TryParse(m.Groups[1].Value, out int pid) || pid == Environment.ProcessId)
+                    return false;
+                using Process other = Process.GetProcessById(pid);
+                using Process me = Process.GetCurrentProcess();
+                return !other.HasExited && other.ProcessName.Equals(me.ProcessName, StringComparison.OrdinalIgnoreCase);
+            }
+            catch
+            {
+                return false; // no such process any more
+            }
+        }
+
         /// <summary>The server, for player and actor counts in the stats. Optional.</summary>
         public static CoveServer? Server;
 
@@ -110,6 +132,13 @@ namespace Cove.Server
                 ReadSettings(Path.Combine(root, SettingsFileName));
 
                 // the last run never said goodbye: find out what it was doing
+                // the flag belongs to a server that is still running: this is a second copy, leave everything alone
+                if (File.Exists(flagPath) && FlagOwnerAlive())
+                {
+                    AnotherServerRunning = true;
+                    return;
+                }
+
                 if (File.Exists(flagPath))
                     ReportPreviousRun();
 
