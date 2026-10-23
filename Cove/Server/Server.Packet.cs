@@ -121,7 +121,10 @@ namespace Cove.Server
             }
 
             if (packetInfo == null || !TryGetString(packetInfo, "type", out string packetType))
-                return; // unreadable packet, or no type to dispatch on
+            {
+                GuardGarbage(sender); // unreadable packet, or no type to dispatch on
+                return;
+            }
 
             CrashWatch.CountPacket(packetType);
 

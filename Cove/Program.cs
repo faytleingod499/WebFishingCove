@@ -36,7 +36,8 @@ if (CrashWatch.AnotherServerRunning)
 
 var serverLogger = new LoggerConfiguration()
     .WriteTo.Console()
-    .WriteTo.File($"logs/log-{epoch}.txt") // Daily rolling logs
+    // at most 50 MB per file and the newest 20 files, so nothing (a flood of bad packets, say) can fill the disk
+    .WriteTo.File($"logs/log-{epoch}.txt", fileSizeLimitBytes: 50L * 1024 * 1024, rollOnFileSizeLimit: true, retainedFileCountLimit: 20)
     .WriteTo.Sink(new CrashWatchSink()) // every log line also goes into the Crash Watch blackbox
     .CreateLogger();
 

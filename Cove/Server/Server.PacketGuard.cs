@@ -41,14 +41,36 @@ namespace Cove.Server
             public int ActionsThisSecond;
             public long MinuteStart;
             public int UnknownThisMinute;
+            public long GarbageStart;
+            public int GarbageCount;
         }
 
         private readonly Dictionary<ulong, GuardStats> guardStats = new();
         private readonly HashSet<ulong> guardBanned = new();
 
+        private const int GuardMaxGarbagePer10s = 50;
+
+        /// <summary>A packet that couldn't be read: the game never sends those, a flood of them is an attack on the server.</summary>
+        internal void GuardGarbage(CSteamID sender)
+        {
+            ulong id = sender.m_SteamID;
+            long now = Environment.TickCount64;
+            if (!guardStats.TryGetValue(id, out GuardStats? stats))
+                guardStats[id] = stats = new GuardStats { SecondStart = now, MinuteStart = now, GarbageStart = now };
+            if (now - stats.GarbageStart >= 10_000)
+            {
+                stats.GarbageStart = now;
+                stats.GarbageCount = 0;
+            }
+            if (++stats.GarbageCount > GuardMaxGarbagePer10s)
+                GuardBan(sender, $"a junk packet flood (more than {GuardMaxGarbagePer10s} unreadable packets in 10 seconds)");
+        }
+
         /// <summary>Called for a packet that failed to decompress; true when it was an attack and the sender is banned.</summary>
         internal bool GuardBadPayload(CSteamID sender, Exception e)
         {
+            if (e is not InvalidDataException || !e.Message.Contains("exceeds"))
+                GuardGarbage(sender); // not gzip at all, or cut off: garbage
             if (e is InvalidDataException && e.Message.Contains("exceeds"))
             {
                 GuardBan(sender, $"a decompression bomb (a packet that unpacks to more than {GzipHelper.MaxDecompressedSize / (1024 * 1024)} MB)");

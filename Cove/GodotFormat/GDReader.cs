@@ -38,6 +38,37 @@ namespace Cove.GodotFormat
 
         private long remainingBytes => reader.BaseStream.Length - reader.BaseStream.Position;
 
+        private static readonly object badLock = new();
+        private static long badWindowStart;
+        private static int badLogged;
+        private static int badSkipped;
+
+        private void LogBadPacket(Exception e)
+        {
+            lock (badLock)
+            {
+                long now = Environment.TickCount64;
+                if (now - badWindowStart > 60_000)
+                {
+                    if (badSkipped > 0)
+                        logger.Warning($"{badSkipped} more unreadable packets in the last minute were not logged.");
+                    badWindowStart = now;
+                    badLogged = 0;
+                    badSkipped = 0;
+                }
+                if (badLogged < 5)
+                {
+                    badLogged++;
+                    string what = e.Message.Length > 120 ? e.Message.Substring(0, 120) + "..." : e.Message;
+                    logger.Warning($"Unreadable packet ({e.GetType().Name}: {what})");
+                }
+                else
+                {
+                    badSkipped++;
+                }
+            }
+        }
+
         public Dictionary<string, object> readPacket()
         {
             Dictionary<string, object> dic = new Dictionary<string, object>();
@@ -55,8 +86,10 @@ namespace Cove.GodotFormat
             }
             catch (Exception e)
             {
-                logger.Error("-- Error reading packet! --"); // incase we do have a error!
-                logger.Error(e.ToString()); // incase we do have a error!
+                // Anyone can send garbage, and it used to log a full stack trace for every packet: a flood of them filled the
+                // disk. Now a short line, at most a few a minute (Packet Guard bans whoever floods them).
+                LogBadPacket(e);
+                dic = new Dictionary<string, object>();
             }
 
             return dic;
@@ -120,7 +153,7 @@ namespace Cove.GodotFormat
                     return readVector2();
 
                 default:
-                    logger.Error($"Unable to handel object of type: {type}");
+                    LogBadPacket(new InvalidDataException($"unknown value type {type}")); // short and rate limited
                     return new ReadError();
             }
         }
