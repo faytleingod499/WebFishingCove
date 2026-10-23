@@ -288,6 +288,10 @@ namespace Cove.Server
                                 if (serverInst.Type == "raincloud")
                                     break;
 
+                                // Packet Guard: only from a player who is near it, and not in floods (see Server.PacketGuard.cs)
+                                if (!GuardWipe(sender, serverInst))
+                                    break;
+
                                 //Log($"Player asked to remove {serverInst.Type} actor");
 
                                 // the sever owns the instance

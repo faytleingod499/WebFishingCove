@@ -138,6 +138,37 @@ namespace Cove.Server
             return false;
         }
 
+        private const float GuardWipeReach = 80f;       // metres; a cast or a net reaches far less
+        private const int GuardMaxWipesPerMinute = 40;  // one per catch is normal, a catch takes seconds
+        private readonly Dictionary<ulong, (long start, int count)> guardWipes = new();
+
+        /// <summary>
+        /// A "_wipe_actor" for something the server owns (a fish spot, a metal spot...). The real game sends one when you catch
+        /// or dig something right at that spot. A griefer can send it for any id and clear the whole map of spawns, so it only
+        /// counts from a player who is near the actor, and a flood of them is a ban. True when the wipe is allowed.
+        /// </summary>
+        internal bool GuardWipe(CSteamID sender, WFActor target)
+        {
+            ulong id = sender.m_SteamID;
+            long now = Environment.TickCount64;
+            guardWipes.TryGetValue(id, out var w);
+            if (now - w.start >= 60_000)
+                w = (now, 0);
+            w.count++;
+            guardWipes[id] = w;
+            if (w.count > GuardMaxWipesPerMinute && !isPlayerAdmin(sender))
+            {
+                GuardBan(sender, $"a wipe flood (more than {GuardMaxWipesPerMinute} actor wipes in a minute, which clears the map's fish and metal spots)");
+                return false;
+            }
+
+            WFPlayer? player = AllPlayers.Find(p => p.SteamId.m_SteamID == id);
+            if (player == null)
+                return false;
+            double dx = player.pos.x - target.pos.x, dy = player.pos.y - target.pos.y, dz = player.pos.z - target.pos.z;
+            return Math.Sqrt(dx * dx + dy * dy + dz * dz) <= GuardWipeReach;
+        }
+
         private void GuardBan(CSteamID sender, string reason)
         {
             ulong id = sender.m_SteamID;
