@@ -284,7 +284,7 @@ namespace Cove.GodotFormat
 
                 if (keyValue == null || !(keyValue is String)) // if the value is not a string (bad read) break the loop.
                 {
-                    logger.Error("READ ERROR, KEY PROVIDED IS NOT A STRING!");
+                    LogBadPacket(new InvalidDataException("a dictionary key that is not text")); // short and rate limited
                     break; //break from the loop to save the server!
                 }
                 else

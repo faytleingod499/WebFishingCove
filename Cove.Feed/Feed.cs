@@ -45,6 +45,9 @@ public class Feed : CovePlugin
 
         // coins
         public int CoinsPerFeed = 1;
+        // coins for catching a fish: Normal 1 ... Alpha 6 (reported by the Wolfpark HUD, see CatchCoins)
+        public bool CatchCoins = true;
+        public string CatchMessage = "+%earned% for your %quality% catch!";
         // read from shop.txt
         public List<ShopItem> Items = new()
         {
@@ -258,6 +261,13 @@ public class Feed : CovePlugin
             callback: (player, args) => Safely("gamble", () => Gamble(player, args))
         );
         SetCommandDescription("gamble", "Bet wolf coins on a wolf roll | Usage: !gamble <coins>");
+
+        RegisterCommand(
+            command: "catchcoins",
+            aliases: [],
+            callback: (player, args) => Safely("catchcoins", () => ClaimCatch(player, args))
+        );
+        SetCommandDescription("catchcoins", "Used by the Wolfpark HUD when you catch a fish");
     }
 
     private void Safely(string command, Action run)
@@ -287,6 +297,7 @@ public class Feed : CovePlugin
         ParentServer.UnregisterCommand("shop");
         ParentServer.UnregisterCommand("buy");
         ParentServer.UnregisterCommand("gamble");
+        ParentServer.UnregisterCommand("catchcoins");
         ClearLobbyData();
     }
 
@@ -372,6 +383,126 @@ public class Feed : CovePlugin
         {
             Log($"Could not send the hungry message: {e.Message}");
         }
+    }
+
+    // ---- coins for catches ----
+    // A player's game shares what they just caught (fish id and size, in "caught_item" of its animation data) with everyone,
+    // the server included, but not the quality. The Wolfpark HUD reads the quality from the player's own inventory and sends
+    // !catchcoins <quality> <fish id>. It only pays for a catch the server saw in the last 30 seconds, once.
+
+    private const int CaughtItemIndex = 6;
+    private static readonly string[] QualityNames ={ "Normal", "Shining", "Glistening", "Opulent", "Radiant", "Alpha" };
+    private sealed class Catch
+    {
+        public string Id = "";
+        public long Tick;
+        public bool Paid;
+    }
+    private readonly Dictionary<ulong, Catch> catches = new();
+    private readonly Dictionary<ulong, string> lastCaught = new();
+
+    public override void onNetworkPacket(WFPlayer sender, Dictionary<string, object> packet)
+    {
+        base.onNetworkPacket(sender, packet);
+        if (!packet.TryGetValue("type", out object? type) || type as string != "actor_animation_update")
+            return;
+        // the game sends its animation data as a list of the values, in the order player.gd declares them:
+        // "caught_item" is the 7th (index 6)
+        if (!packet.TryGetValue("data", out object? rawData))
+            return;
+        object? rawItem = null;
+        if (rawData is Dictionary<int, object> list)
+            list.TryGetValue(CaughtItemIndex, out rawItem);
+        else if (rawData is Dictionary<string, object> named)
+            named.TryGetValue("caught_item", out rawItem);
+        if (rawItem == null)
+            return;
+
+        ulong id = sender.SteamId.m_SteamID;
+        string seen = "";
+        string fish = "";
+        if (rawItem is Dictionary<string, object> item && item.TryGetValue("id", out object? rawId) && rawId is string fishId && fishId.Length > 0)
+        {
+            fish = fishId;
+            item.TryGetValue("size", out object? size);
+            seen = fishId + "|" + Convert.ToString(size, CultureInfo.InvariantCulture);
+        }
+
+        int payQuality = -1;
+        lock (sync)
+        {
+            lastCaught.TryGetValue(id, out string? before);
+            if (seen == (before ?? ""))
+                return; // the same catch, sent again with every animation update
+            lastCaught[id] = seen;
+            if (seen.Length == 0)
+                return;
+            Catch c = new() { Id = fish, Tick = Environment.TickCount64 };
+            catches[id] = c;
+            // the HUD's message can arrive a moment before the catch (they travel separately)
+            if (claims.TryGetValue(id, out Claim? early) && early.Id == fish && c.Tick - early.Tick <= 10_000)
+            {
+                claims.Remove(id);
+                c.Paid = true;
+                payQuality = early.Quality;
+            }
+        }
+        if (payQuality >= 0)
+            Pay(sender, payQuality);
+    }
+
+    private sealed class Claim
+    {
+        public string Id = "";
+        public int Quality;
+        public long Tick;
+    }
+    private readonly Dictionary<ulong, Claim> claims = new();
+
+    private void ClaimCatch(WFPlayer player, string[] args)
+    {
+        Settings s = GetSettings();
+        if (!s.CatchCoins || args.Length < 2 || !int.TryParse(args[0], out int quality) || quality < 0 || quality >= QualityNames.Length)
+            return;
+        string fish = args[1];
+        ulong id = player.SteamId.m_SteamID;
+        long now = Environment.TickCount64;
+
+        lock (sync)
+        {
+            if (!catches.TryGetValue(id, out Catch? c) || c.Paid || c.Id != fish || now - c.Tick > 30_000)
+            {
+                // not seen yet: held for a few seconds in case the catch is still on its way, paid once (see above)
+                claims[id] = new Claim { Id = fish, Quality = quality, Tick = now };
+                return;
+            }
+            c.Paid = true;
+        }
+        Pay(player, quality);
+    }
+
+    private void Pay(WFPlayer player, int quality)
+    {
+        Settings s = GetSettings();
+        if (!s.CatchCoins)
+            return;
+        ulong id = player.SteamId.m_SteamID;
+        int earned = quality + 1;
+        int balance;
+        lock (sync)
+        {
+            if (!counts.TryGetValue(id, out Record? record))
+                counts[id] = record = new Record();
+            record.Name = player.Username;
+            record.Coins += earned;
+            balance = record.Coins;
+            SaveCounts();
+        }
+        publishDirty = true; // the HUD's coin count updates right away
+
+        if (s.CatchMessage.Length > 0)
+            SendPlayerChatMessage(player, s.CatchMessage.Replace("%earned%", Coins(earned)).Replace("%quality%", QualityNames[quality])
+                .Replace("%coins%", Coins(balance)).Replace("%player%", player.Username));
     }
 
     private Settings GetSettings()
@@ -854,6 +985,12 @@ public class Feed : CovePlugin
                 case "cooldownmessage":
                     next.CooldownMessage = value;
                     break;
+                case "catchcoins":
+                    next.CatchCoins = !(value.Equals("off", StringComparison.OrdinalIgnoreCase) || value.Equals("false", StringComparison.OrdinalIgnoreCase) || value == "0");
+                    break;
+                case "catchmessage":
+                    next.CatchMessage = value;
+                    break;
                 case "coinsperfeed":
                     if (int.TryParse(value, out int perFeed) && perFeed >= 0)
                         next.CoinsPerFeed = Math.Min(perFeed, 1000);
@@ -1237,6 +1374,11 @@ public class Feed : CovePlugin
             "hungryTo = player",
             "",
             "coinsPerFeed = 1",
+            "# coins for every fish caught: Normal 1, Shining 2, Glistening 3, Opulent 4, Radiant 5, Alpha 6.",
+            "# Needs the Wolfpark HUD mod (the server can see a catch but not its quality, the mod tells it).",
+            "# %earned% is the coins, %quality% the quality's name. catchMessage empty sends nothing.",
+            "catchCoins = on",
+            "catchMessage = +%earned% for your %quality% catch!",
             "gamble = on",
             "gambleMin = 1",
             "gambleMax = 100",
