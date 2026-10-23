@@ -36,6 +36,13 @@ namespace Cove.GodotFormat
             logger = serverLogger;
         }
 
+        /// <summary>
+        /// Set while reading when a packet carries a node path or an object: the real game never sends those, and a node path
+        /// in a sound name is how the "map vanishes" attack works (the game uses the name as a node lookup). Read it right after
+        /// readPacket on the same thread.
+        /// </summary>
+        [ThreadStatic] public static string? ForbiddenValue;
+
         private long remainingBytes => reader.BaseStream.Length - reader.BaseStream.Position;
 
         private static readonly object badLock = new();
@@ -151,6 +158,12 @@ namespace Cove.GodotFormat
 
                 case (int)GodotTypes.vector2Value:
                     return readVector2();
+
+                case (int)GodotTypes.nodePathValue:
+                case (int)GodotTypes.objectValue:
+                case (int)GodotTypes.ridValue:
+                    ForbiddenValue = type == (int)GodotTypes.nodePathValue ? "a node path" : "an object";
+                    return new ReadError();
 
                 default:
                     LogBadPacket(new InvalidDataException($"unknown value type {type}")); // short and rate limited

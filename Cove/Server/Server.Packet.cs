@@ -109,9 +109,17 @@ namespace Cove.Server
             }
 
             Dictionary<string, object> packetInfo;
+            GodotReader.ForbiddenValue = null;
             try
             {
                 packetInfo = readPacket(GzipHelper.DecompressGzip(packet));
+                if (GodotReader.ForbiddenValue != null)
+                {
+                    string what = GodotReader.ForbiddenValue;
+                    GodotReader.ForbiddenValue = null;
+                    GuardBan(sender, $"a packet with {what} inside (the real game never sends one; it is how the map-vanishing sound attack works)");
+                    return;
+                }
             }
             catch (Exception e) when (e is InvalidDataException || e is EndOfStreamException || e is IOException)
             {
