@@ -794,7 +794,12 @@ namespace Cove.Server
                 return;
             }
 
-            Log($"[{(local ? "Local" : "Global")}] [{sender.FisherID}] {sender.Username}: {message}");
+            // Announcements like "%u ranked up to rank 2" carry %u where the game puts the player's name: fill it in for
+            // the console (plugins still get the original text, the Discord bridge looks for the %u itself)
+            if (message.Contains("%u"))
+                Log($"[{(local ? "Local" : "Global")}] [{sender.FisherID}] {message.Replace("%u", sender.Username)}");
+            else
+                Log($"[{(local ? "Local" : "Global")}] [{sender.FisherID}] {sender.Username}: {message}");
 
             // check if the first char is !, if so its a command
             if (message.StartsWith("!"))
