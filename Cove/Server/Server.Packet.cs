@@ -115,7 +115,8 @@ namespace Cove.Server
             }
             catch (Exception e) when (e is InvalidDataException || e is EndOfStreamException || e is IOException)
             {
-                // not gzip, truncated, or a decompression bomb. Drop it quietly, a client can send this at will.
+                // not gzip or truncated: dropped quietly. A decompression bomb is an attack on the players: banned.
+                GuardBadPayload(sender, e);
                 return;
             }
 
@@ -123,6 +124,10 @@ namespace Cove.Server
                 return; // unreadable packet, or no type to dispatch on
 
             CrashWatch.CountPacket(packetType);
+
+            // Packet Guard: the attacks griefers send to every player (see Server.PacketGuard.cs)
+            if (packetType == "actor_action" && GuardActorAction(sender, packetInfo))
+                return;
             CrashWatch.Busy("network", $"packet \"{packetType}\" from {sender.m_SteamID}");
 
             var fromPlayer = AllPlayers.Find(p => p.SteamId.m_SteamID == sender.m_SteamID);

@@ -100,6 +100,7 @@ public class DiscordBridge : CovePlugin
     public override void onInit()
     {
         base.onInit();
+        ParentServer.SecurityAlert += OnSecurityAlert;
 
         filePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, FileName);
 
@@ -141,6 +142,7 @@ public class DiscordBridge : CovePlugin
     {
         base.onEnd();
         ParentServer.UnregisterCommand("discord");
+        ParentServer.SecurityAlert -= OnSecurityAlert;
 
         Settings s = GetSettings();
         // a plugin reload is not the server stopping
@@ -199,6 +201,13 @@ public class DiscordBridge : CovePlugin
         }
 
         Enqueue(Escape(text), NameOf(sender));
+    }
+
+    // Packet Guard bans (attack packets) go to the channel too, whatever else is relayed
+    private void OnSecurityAlert(string text)
+    {
+        if (GetSettings().Ready)
+            Enqueue($":shield: **{Escape(text)}**");
     }
 
     public override void onPlayerJoin(WFPlayer player)
