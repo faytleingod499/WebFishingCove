@@ -31,9 +31,11 @@ namespace Cove.Server
         private const int GuardMaxActionsPerSecond = 300;
         private const int GuardMaxUnknownPerMinute = 100;
         private const int GuardMaxDepth = 16;
-
+        // a sound is a node name in the player's sound_manager, never a path
         // a sound is a node name in the player's sound_manager: letters, numbers, _ and -, never a path
-        private static readonly Regex SafeSoundName = new(@"^[A-Za-z0-9_\-]{1,48}$", RegexOptions.Compiled);
+        // Modded species name their sounds after the species id, so spaces, accents and the like are normal ("bark_Awesome Possum_species_possum").
+        // What a node path needs is "/", "..", ":", "@" or "%" (Lure itself replaces "." ":" "@" in these names), so those and control characters are the attack.
+        private static readonly Regex SafeSoundName = new(@"^[^/\\.:@%""\x00-\x1f]{1,96}$", RegexOptions.Compiled);
 
         private sealed class GuardStats
         {
