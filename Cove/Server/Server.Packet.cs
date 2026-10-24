@@ -110,9 +110,12 @@ namespace Cove.Server
 
             Dictionary<string, object> packetInfo;
             GodotReader.ForbiddenValue = null;
+            int unpackedSize;
             try
             {
-                packetInfo = readPacket(GzipHelper.DecompressGzip(packet));
+                byte[] unpacked = GzipHelper.DecompressGzip(packet);
+                unpackedSize = unpacked.Length;
+                packetInfo = readPacket(unpacked);
                 if (GodotReader.ForbiddenValue != null)
                 {
                     string what = GodotReader.ForbiddenValue;
@@ -135,6 +138,10 @@ namespace Cove.Server
             }
 
             CrashWatch.CountPacket(packetType);
+
+            // Packet Guard: packets that make other players' games write into their log (see Server.PacketGuard.cs)
+            if (GuardLogFlood(sender, packetType, packetInfo, unpackedSize))
+                return;
 
             // Packet Guard: the attacks griefers send to every player (see Server.PacketGuard.cs)
             if (packetType == "actor_action" && GuardActorAction(sender, packetInfo))

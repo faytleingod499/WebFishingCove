@@ -138,6 +138,57 @@ namespace Cove.Server
             return false;
         }
 
+        private const int GuardMaxPacketBytes = 128 * 1024;
+        // the packet types that can really be big: a chalk canvas, the list of actors, the lobby
+        private static readonly HashSet<string> GuardBigTypes = new() { "chalk_packet", "actor_request_send", "receive_weblobby", "request_actors" };
+
+        /// <summary>
+        /// The game prints a whole packet into godot.log when it decides the packet is malformed, and some of what it receives
+        /// anyway. A griefer sends big or malformed packets to every player until their log fills the disk (and a full disk
+        /// wipes their save). The real game never sends: text over 4096 characters anywhere, a packet over 128 KB (except a
+        /// chalk canvas and a few lists), a position update that isn't a position, or an animation update with extra values.
+        /// True when the packet was dropped (and the sender banned, or counted towards a ban when it's only malformed).
+        /// </summary>
+        internal bool GuardLogFlood(CSteamID sender, string type, Dictionary<string, object> packet, int unpackedSize)
+        {
+            if (type != "actor_action") // actor actions get the same text check in GuardActorAction
+            {
+                int longest = LongestText(packet, 0);
+                if (longest > GuardMaxText)
+                {
+                    GuardBan(sender, $"the log flood ({type} with {longest} characters of text, which fills other players' disks)");
+                    return true;
+                }
+            }
+
+            if (unpackedSize > GuardMaxPacketBytes && !GuardBigTypes.Contains(type))
+            {
+                GuardBan(sender, $"the log flood ({type} packet of {unpackedSize / 1024} KB; the game sends those in a few hundred bytes)");
+                return true;
+            }
+
+            bool malformed = false;
+            switch (type)
+            {
+                case "actor_update":
+                    malformed = !TryGetLong(packet, "actor_id", out _) || !TryGetVector3(packet, "pos", out _) || !TryGetVector3(packet, "rot", out _);
+                    break;
+                case "actor_animation_update":
+                    malformed = !TryGetLong(packet, "actor_id", out _)
+                        || !packet.TryGetValue("data", out object? data) || data is not Dictionary<int, object> list || list.Count > 24;
+                    break;
+                case "message":
+                    malformed = !packet.ContainsKey("color") || !packet.ContainsKey("zone_owner");
+                    break;
+            }
+            if (malformed)
+            {
+                GuardGarbage(sender);
+                return true;
+            }
+            return false;
+        }
+
         private const float GuardWipeReach = 80f;       // metres; a cast or a net reaches far less
         private const int GuardMaxWipesPerMinute = 40;  // one per catch is normal, a catch takes seconds
         private readonly Dictionary<ulong, (long start, int count)> guardWipes = new();
