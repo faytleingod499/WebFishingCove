@@ -11,7 +11,7 @@ using System.Threading.Tasks;
 namespace Cove.Server
 {
 
-    /// <summary>Who may use a command. Only used to decide which commands !help shows, a command still checks for itself.</summary>
+    /// <summary>Who may use a command. Enforced when the command is invoked, and decides which commands !help shows. Admin includes the host.</summary>
     public enum CommandAccess
     {
         Everyone,
@@ -387,6 +387,17 @@ namespace Cove.Server
                 Log($"Command '{command}' not found!");
                 return;
             }
+
+            // The access level is enforced here, before the command's own code runs, so an Admin or Host command
+            // (setjoinable, ban, kick, ...) can never be used by anyone else, even if its callback forgets to check.
+            if (cmd.Access == CommandAccess.Admin && !isPlayerAdmin(player.SteamId))
+                return;
+            if (cmd.Access == CommandAccess.Host && player.SteamId.m_SteamID != serverPlayer.SteamId.m_SteamID)
+            {
+                messagePlayer("You are not the host!", player.SteamId);
+                return;
+            }
+
             cmd.Invoke(player, args);
         }
 
