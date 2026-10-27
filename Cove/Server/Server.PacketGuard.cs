@@ -64,6 +64,8 @@ namespace Cove.Server
                 stats.GarbageStart = now;
                 stats.GarbageCount = 0;
             }
+            if (stats.GarbageCount == 0)
+                GuardNote(id, "junk", $"JUNK      {id}: unreadable packet(s) (first of a burst; {GuardMaxGarbagePer10s}+ in 10 s gets a ban)");
             if (++stats.GarbageCount > GuardMaxGarbagePer10s)
                 GuardBan(sender, $"a junk packet flood (more than {GuardMaxGarbagePer10s} unreadable packets in 10 seconds)");
         }
@@ -72,7 +74,10 @@ namespace Cove.Server
         internal bool GuardBadPayload(CSteamID sender, Exception e)
         {
             if (e is not InvalidDataException || !e.Message.Contains("exceeds"))
+            {
+                GuardNote(sender.m_SteamID, "payload", $"BADPACKET {sender.m_SteamID}: {e.GetType().Name}: {GuardSafe(e.Message, 120)}");
                 GuardGarbage(sender); // not gzip at all, or cut off: garbage
+            }
             if (e is InvalidDataException && e.Message.Contains("exceeds"))
             {
                 GuardBan(sender, $"a decompression bomb (a packet that unpacks to more than {GzipHelper.MaxDecompressedSize / (1024 * 1024)} MB)");
@@ -219,7 +224,10 @@ namespace Cove.Server
             if (player == null)
                 return false;
             double dx = player.pos.x - target.pos.x, dy = player.pos.y - target.pos.y, dz = player.pos.z - target.pos.z;
-            return Math.Sqrt(dx * dx + dy * dy + dz * dz) <= GuardWipeReach;
+            bool near = Math.Sqrt(dx * dx + dy * dy + dz * dz) <= GuardWipeReach;
+            if (!near)
+                GuardNote(id, "wipe", $"WIPE      {id} ({GuardSafe(player.Username, 40)}): wipe of {GuardSafe(target.Type, 30)} refused, {Math.Sqrt(dx * dx + dy * dy + dz * dz):F0} m away");
+            return near;
         }
 
         private void GuardBan(CSteamID sender, string reason)
@@ -233,6 +241,8 @@ namespace Cove.Server
             string who = player != null ? $"{player.Username} ({id})" : id.ToString();
             string text = $"Packet Guard banned {who} for {reason}.";
 
+            GuardLog($"GUARD BAN {id} ({GuardSafe(GuardNameOf(sender), 40)}): {reason}");
+            GuardWriteTally(id, "before the ban");
             logger.Warning(text);
             CrashWatch.Note("guard", text);
 

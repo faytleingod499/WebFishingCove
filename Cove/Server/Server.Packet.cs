@@ -105,6 +105,7 @@ namespace Cove.Server
             {
                 if (bannedNotified.TryAdd(sender.m_SteamID, 0))
                     banPlayer(sender);
+                GuardNote(sender.m_SteamID, "banned", $"IGNORED   {sender.m_SteamID} ({GuardSafe(GuardNameOf(sender), 40)}): packets from a banned player dropped");
                 return; // never process anything from a banned player
             }
 
@@ -138,6 +139,7 @@ namespace Cove.Server
             }
 
             CrashWatch.CountPacket(packetType);
+            GuardCount(sender.m_SteamID, packetType);
 
             // Packet Guard: packets that make other players' games write into their log (see Server.PacketGuard.cs)
             if (GuardLogFlood(sender, packetType, packetInfo, unpackedSize))
@@ -236,6 +238,7 @@ namespace Cove.Server
                                 {
                                     // print out a join message
                                     Log($"[{thisPlayer.FisherID}] {thisPlayer.Username} joined. [{AllPlayers.Count}/{MaxPlayers}]");
+                                    GuardLog($"JOINED    {thisPlayer.SteamId.m_SteamID} ({GuardSafe(thisPlayer.Username, 40)}): game finished joining [{AllPlayers.Count}/{MaxPlayers}]");
                                     sendWebLobbyPacket(thisPlayer.SteamId);
                                     updatePlayercount();
 

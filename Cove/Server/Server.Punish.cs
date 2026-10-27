@@ -33,6 +33,9 @@ namespace Cove.Server
         
         public void banPlayer(CSteamID id, bool saveToFile = false, string banReason = "")
         {
+            // every ban, whoever or whatever made it (a command, a plugin, Packet Guard), goes into packetguard.log
+            GuardLog($"BAN       {id.m_SteamID} ({GuardSafe(GuardNameOf(id), 40)}): {(string.IsNullOrEmpty(banReason) ? "(no reason given)" : banReason)}{(saveToFile ? "" : " [not written to bans.txt]")}");
+            GuardWriteTally(id.m_SteamID, "at the ban");
             var player = new WFPlayer(id, new SteamNetworkingIdentity());
 
             Dictionary<string, object> banPacket = new();
@@ -64,6 +67,7 @@ namespace Cove.Server
             //     new SteamNetworkingIdentity()
             // );
             // plugin.plugin.onPlayerUnbanned(player);
+            GuardLog($"UNBAN     {id.m_SteamID} ({GuardSafe(GuardNameOf(id), 40)})");
             unwriteFromBansFile(id);
         }
 
@@ -191,6 +195,8 @@ namespace Cove.Server
 
         public void kickPlayer(CSteamID id)
         {
+            GuardLog($"KICK      {id.m_SteamID} ({GuardSafe(GuardNameOf(id), 40)})");
+            GuardWriteTally(id.m_SteamID, "at the kick");
             Dictionary<string, object> leftPacket = new();
             leftPacket["type"] = "peer_was_kicked";
             leftPacket["user_id"] = (long)id.m_SteamID;

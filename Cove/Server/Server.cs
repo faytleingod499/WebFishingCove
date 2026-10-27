@@ -416,6 +416,8 @@ namespace Cove.Server
                         if (player != null)
                         {
                             AllPlayers.Remove(player);
+                            GuardLog($"LEFT      {player.SteamId.m_SteamID} ({GuardSafe(player.Username, 40)})");
+                            GuardWriteTally(player.SteamId.m_SteamID, "this visit");
                             allActors.Remove(player); // players are actors too, leaving them here leaked an entry per join
                             Log($"[{player.FisherID}] {player.Username} left. [{AllPlayers.Count}/{MaxPlayers}]");
 
@@ -529,6 +531,7 @@ namespace Cove.Server
                         // make the player a wfplayer
                         WFPlayer player = new WFPlayer(userId, new SteamNetworkingIdentity());
                         AllPlayers.Add(player);
+                        GuardLog($"ACCEPTED  {userId.m_SteamID} ({GuardSafe(player.Username, 40)}): lobby join accepted (the welcome message only follows when their game finishes joining)");
                         
                         // if there is already a player with the same FisherID, remove them from the previous players list to prevent duplicates
                         var sharedIDPrev = PreviousPlayers.Find(p => p.FisherID == player.FisherID);
