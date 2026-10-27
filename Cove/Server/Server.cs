@@ -270,6 +270,7 @@ namespace Cove.Server
 
             Log("Reading admins.cfg");
             readAdmins();
+            LoadFamilyShareSettings();
             Log("Setup finished, starting server!");
 
             RegisterDefaultCommands(); // register the default commands
@@ -521,6 +522,18 @@ namespace Cove.Server
                             var rejectMessage = $"$weblobby_request_denied_deny-{userId.m_SteamID}";
                             var rejectData = Encoding.UTF8.GetBytes(rejectMessage);
                             SteamMatchmaking.SendLobbyChatMsg(new CSteamID(callback.m_ulSteamIDLobby), rejectData, rejectData.Count());
+                            return;
+                        }
+
+                        // Steam Family Sharing (a borrowed copy of the game) is refused. While Steam is being asked
+                        // nothing is sent; the player's game repeats the request about once a second.
+                        ShareVerdict shareVerdict = CheckFamilySharing(userId);
+                        if (shareVerdict == ShareVerdict.Wait)
+                            return;
+                        if (shareVerdict == ShareVerdict.Deny)
+                        {
+                            var shareRejectData = Encoding.UTF8.GetBytes($"$weblobby_request_denied_deny-{userId.m_SteamID}");
+                            SteamMatchmaking.SendLobbyChatMsg(new CSteamID(callback.m_ulSteamIDLobby), shareRejectData, shareRejectData.Count());
                             return;
                         }
 
