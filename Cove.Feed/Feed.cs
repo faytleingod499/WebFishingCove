@@ -59,6 +59,7 @@ public class Feed : CovePlugin
         public string BuyNotEnough = "A %item% costs %cost%, you have %coins%. Feed the wolves to earn more!";
         public string BuyWait = "A %item% was only just bought, please wait %seconds% more second(s).";
         public string BuyFailed = "The %item% could not be bought right now, you were not charged.";
+        public string BuyNeedsHud = "The %item% only works with the Wolfpark HUD mod (version 1.17 or newer). You were not charged.";
         public bool GambleEnabled = true;
         public int GambleMin = 1;
         public int GambleMax = 100;
@@ -121,6 +122,13 @@ public class Feed : CovePlugin
     private readonly Dictionary<ulong, long> lastGamble = new();
     private readonly Dictionary<ulong, (int Seq, double Mult, int Net)> gambleResults = new();
     private readonly Dictionary<ulong, long> hungryAt = new(); // when to tell a player the wolves are hungry again
+    // Buffs are the game's own drink effects (speed, catch, bounce...). The server only records that a player got one;
+    // the player's Wolfpark HUD (1.17+, which announces itself with !wphud) applies it to their own game.
+    private static readonly HashSet<string> BuffDrinks = new() { "speed", "speed_burst", "catch", "catch_big", "catch_deluxe", "bounce", "bounce_big" };
+    private const string BuffMarker = "# Feed added the buff items below once";
+    private readonly HashSet<ulong> hudPlayers = new();
+    private readonly Dictionary<ulong, (int Seq, string Drink)> buffGrants = new();
+    private readonly Dictionary<ulong, string> publishedBuffs = new();
     private string countsPath = "";
     private string settingsPath = "";
     private string shopPath = "";
@@ -268,6 +276,19 @@ public class Feed : CovePlugin
             callback: (player, args) => Safely("catchcoins", () => ClaimCatch(player, args))
         );
         SetCommandDescription("catchcoins", "Used by the Wolfpark HUD when you catch a fish");
+
+        RegisterCommand(
+            command: "wphud",
+            aliases: [],
+            callback: (player, args) => Safely("wphud", () =>
+            {
+                // sent by the Wolfpark HUD when it joins: "!wphud buffs" means it can apply buffs
+                if (args.Length > 0 && args[0].Equals("buffs", StringComparison.OrdinalIgnoreCase))
+                    lock (sync)
+                        hudPlayers.Add(player.SteamId.m_SteamID);
+            })
+        );
+        SetCommandDescription("wphud", "Used by the Wolfpark HUD to say hello");
     }
 
     private void Safely(string command, Action run)
@@ -298,6 +319,7 @@ public class Feed : CovePlugin
         ParentServer.UnregisterCommand("buy");
         ParentServer.UnregisterCommand("gamble");
         ParentServer.UnregisterCommand("catchcoins");
+        ParentServer.UnregisterCommand("wphud");
         ClearLobbyData();
     }
 
@@ -310,6 +332,11 @@ public class Feed : CovePlugin
     public override void onPlayerLeave(WFPlayer player)
     {
         base.onPlayerLeave(player);
+        lock (sync)
+        {
+            hudPlayers.Remove(player.SteamId.m_SteamID);
+            buffGrants.Remove(player.SteamId.m_SteamID);
+        }
         publishDirty = true;
     }
 
@@ -604,6 +631,7 @@ public class Feed : CovePlugin
             {
                 // a new lobby, so nothing has been written to it yet
                 published.Clear();
+                publishedBuffs.Clear();
                 publishedShop = "";
                 publishedTitle = "";
                 publishedAdmins = "";
@@ -668,6 +696,27 @@ public class Feed : CovePlugin
                 SteamMatchmaking.SetLobbyData(lobby, "wp_p" + gone, "");
                 published.Remove(gone);
             }
+
+            // the last buff each player bought:  wp_b<SteamID> = "number,drink". The HUD applies it when the number goes up
+            // (the first value it sees after joining is never applied).
+            var wantedBuffs = new Dictionary<ulong, string>();
+            lock (sync)
+            {
+                foreach (var grant in buffGrants)
+                    wantedBuffs[grant.Key] = $"{grant.Value.Seq},{grant.Value.Drink}";
+            }
+            foreach (var pair in wantedBuffs)
+            {
+                if (publishedBuffs.TryGetValue(pair.Key, out string? oldBuff) && oldBuff == pair.Value)
+                    continue;
+                SteamMatchmaking.SetLobbyData(lobby, "wp_b" + pair.Key, pair.Value);
+                publishedBuffs[pair.Key] = pair.Value;
+            }
+            foreach (ulong gone in publishedBuffs.Keys.Where(id => !wantedBuffs.ContainsKey(id)).ToList())
+            {
+                SteamMatchmaking.SetLobbyData(lobby, "wp_b" + gone, "");
+                publishedBuffs.Remove(gone);
+            }
         }
         catch (Exception e)
         {
@@ -692,6 +741,8 @@ public class Feed : CovePlugin
                 SteamMatchmaking.SetLobbyData(lobby, "wp_admins", "");
                 foreach (ulong id in published.Keys)
                     SteamMatchmaking.SetLobbyData(lobby, "wp_p" + id, "");
+                foreach (ulong id in publishedBuffs.Keys)
+                    SteamMatchmaking.SetLobbyData(lobby, "wp_b" + id, "");
             }
         }
         catch (Exception e)
@@ -699,6 +750,7 @@ public class Feed : CovePlugin
             Log($"Could not clear the HUD data: {e.Message}");
         }
         published.Clear();
+        publishedBuffs.Clear();
         publishedAdmins = "";
         publishedLobby = 0;
         publishedShop = "";
@@ -725,8 +777,25 @@ public class Feed : CovePlugin
                    .Replace("%seconds%", seconds.ToString());
     }
 
-    private void RunShopAction(string action)
+    private static bool IsBuff(ShopItem item) => item.Action.StartsWith("buff:", StringComparison.Ordinal);
+
+    private void RunShopAction(WFPlayer player, string action)
     {
+        if (action.StartsWith("buff:", StringComparison.Ordinal))
+        {
+            string drink = action.Substring(5);
+            if (!BuffDrinks.Contains(drink))
+                throw new InvalidOperationException($"unknown buff \"{drink}\"");
+            lock (sync)
+            {
+                ulong id = player.SteamId.m_SteamID;
+                int seq = buffGrants.TryGetValue(id, out var previous) ? previous.Seq + 1 : 1;
+                buffGrants[id] = (seq, drink);
+            }
+            publishDirty = true; // the HUD applies it right away
+            return;
+        }
+
         switch (action)
         {
             case "meteor": ParentServer.spawnFish("fish_spawn_alien"); break;
@@ -751,13 +820,22 @@ public class Feed : CovePlugin
 
         ulong pid = player.SteamId.m_SteamID;
         int coins;
+        bool isBuff = IsBuff(item);
+        // a spawned meteor is for the whole server, so its cooldown is shared; a buff is only for the buyer
+        string cooldownKey = isBuff ? item.Id + "#" + pid : item.Id;
 
         lock (sync)
         {
             long now = Environment.TickCount64;
             bool admin = IsPlayerAdmin(player);
 
-            if (!admin && item.CooldownSeconds > 0 && lastBought.TryGetValue(item.Id, out long last) && now - last < item.CooldownSeconds * 1000L)
+            if (isBuff && !hudPlayers.Contains(pid))
+            {
+                SendPlayerChatMessage(player, FillItem(s.BuyNeedsHud, player.Username, item, 0));
+                return;
+            }
+
+            if (!admin && item.CooldownSeconds > 0 && lastBought.TryGetValue(cooldownKey, out long last) && now - last < item.CooldownSeconds * 1000L)
             {
                 int wait = (int)Math.Ceiling((item.CooldownSeconds * 1000L - (now - last)) / 1000.0);
                 SendPlayerChatMessage(player, FillItem(s.BuyWait, player.Username, item, 0, wait));
@@ -774,13 +852,13 @@ public class Feed : CovePlugin
 
             record.Coins -= item.Price;
             coins = record.Coins;
-            lastBought[item.Id] = now;
+            lastBought[cooldownKey] = now;
             SaveCounts();
         }
 
         try
         {
-            RunShopAction(item.Action);
+            RunShopAction(player, item.Action);
         }
         catch (Exception e)
         {
@@ -791,7 +869,7 @@ public class Feed : CovePlugin
                     record.Coins += item.Price;
                     coins = record.Coins;
                 }
-                lastBought.Remove(item.Id);
+                lastBought.Remove(cooldownKey);
                 SaveCounts();
             }
             Log($"Could not give {player.Username} a {item.Id}: {e.Message}");
@@ -802,7 +880,13 @@ public class Feed : CovePlugin
         Log($"{player.Username} spent {item.Price} coins on {item.Id}.");
         string announce = item.Message ?? s.BuyMessage;
         if (announce.Length > 0)
-            SendGlobalChatMessage(FillItem(announce, player.Username, item, coins));
+        {
+            // a buff without its own message is only told to the buyer, it is nobody else's business
+            if (isBuff && item.Message == null)
+                SendPlayerChatMessage(player, FillItem(announce, player.Username, item, coins));
+            else
+                SendGlobalChatMessage(FillItem(announce, player.Username, item, coins));
+        }
     }
 
     private string FillGamble(string text, string player, int bet, int won, int net, int balance, string label, Settings s)
@@ -1159,9 +1243,10 @@ public class Feed : CovePlugin
             return false;
         }
         string action = parts[3].ToLowerInvariant();
-        if (action != "meteor" && action != "fish" && action != "raincloud" && action != "voidportal")
+        bool validBuff = action.StartsWith("buff:", StringComparison.Ordinal) && BuffDrinks.Contains(action.Substring(5));
+        if (action != "meteor" && action != "fish" && action != "raincloud" && action != "voidportal" && !validBuff)
         {
-            Log($"shop item \"{value}\": the action must be meteor, fish, raincloud or voidportal.");
+            Log($"shop item \"{value}\": the action must be meteor, fish, raincloud, voidportal or buff:<{string.Join("|", BuffDrinks)}>.");
             return false;
         }
         int cooldown = 0;
@@ -1191,6 +1276,7 @@ public class Feed : CovePlugin
         {
             if (!File.Exists(shopPath))
                 EnsureShopFileExists(next);
+            AddDefaultBuffItemsOnce();
 
             loadedShopWriteTime = File.GetLastWriteTimeUtc(shopPath);
 
@@ -1232,6 +1318,9 @@ public class Feed : CovePlugin
                     case "buyfailed":
                         next.BuyFailed = value;
                         break;
+                    case "buyneedshud":
+                        next.BuyNeedsHud = value;
+                        break;
                 }
             }
 
@@ -1266,7 +1355,11 @@ public class Feed : CovePlugin
             "#    Label     the name shown in the Buy menu.",
             "#    price     coins it costs.",
             "#    action    meteor (an alien fish falls from the sky), fish (a fish shadow),",
-            "#              raincloud or voidportal.",
+            "#              raincloud or voidportal. Or a buff for the buyer only: buff:speed (5 min faster sprint),",
+            "#              buff:speed_burst (15 s, very fast), buff:catch, buff:catch_big, buff:catch_deluxe (5 min",
+            "#              better catches, the last one also extra XP), buff:bounce (20 s), buff:bounce_big (10 s).",
+            "#              These are the game's own drink effects. They only work for players with the Wolfpark HUD",
+            "#              1.17 or newer; everyone else is told and not charged. A buff's cooldown is per player.",
             "#    cooldown  seconds before ANYBODY can buy this again, 0 for none. Admins are not limited.",
             "#    message   optional, said to everyone when it is bought. Leave it out to use buyMessage,",
             "#              or write it empty (a | at the end) to say nothing.",
@@ -1288,6 +1381,34 @@ public class Feed : CovePlugin
 
         File.WriteAllText(shopPath, string.Join(Environment.NewLine, lines));
         Log($"Created {ShopFileName}, edit it to change what can be bought.");
+    }
+
+    // The buff items are added to an existing shop.txt once (so nobody has to edit it by hand). The marker line stops
+    // it from coming back after the owner deletes or changes the items.
+    private void AddDefaultBuffItemsOnce()
+    {
+        if (!File.Exists(shopPath))
+            return;
+        string text = File.ReadAllText(shopPath);
+        if (text.Contains(BuffMarker, StringComparison.Ordinal))
+            return;
+
+        string nl = text.Contains("\r\n") ? "\r\n" : "\n";
+        string[] lines =
+        {
+            "",
+            BuffMarker + ". Change the prices, delete what you do not want: they will not be added again.",
+            "item = speed | Speed Drink (5 min) | 8 | buff:speed | 0",
+            "item = speedburst | Speed Burst (15 s) | 4 | buff:speed_burst | 0",
+            "item = lucky | Lucky Catch (5 min) | 15 | buff:catch | 0",
+            "item = bigcatch | Big Catch (5 min) | 25 | buff:catch_big | 0",
+            "item = deluxe | Deluxe Catch + XP (5 min) | 40 | buff:catch_deluxe | 0",
+            "item = bounce | Bouncy (20 s) | 5 | buff:bounce | 0",
+            "item = megabounce | Mega Bounce (10 s) | 8 | buff:bounce_big | 0",
+            "",
+        };
+        File.AppendAllText(shopPath, (text.EndsWith('\n') ? "" : nl) + string.Join(nl, lines));
+        Log($"Added the buff items to {ShopFileName}.");
     }
 
     // gambleOutcome = chance | multiplier | message
