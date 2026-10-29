@@ -99,6 +99,27 @@ public class Feed : CovePlugin
         public string Action = "";
         public int CooldownSeconds;
         public string? Message; // null = the buyMessage of shop.txt, empty = say nothing
+        public string Description = ""; // shown when the player hovers over the item in the HUD's Buy menu
+    }
+
+    // what an item does, used when shop.txt has no  describe = id | text  line for it
+    private static string DefaultDescription(string action)
+    {
+        return action switch
+        {
+            "meteor" => "Calls down a meteor: an alien fish falls from the sky for anyone to catch.",
+            "fish" => "Makes a fish shadow appear in the water for anyone to catch.",
+            "raincloud" => "Summons a rain cloud. Fish bite a little more under the rain.",
+            "voidportal" => "Opens a void portal somewhere on the map for 10 minutes.",
+            "buff:speed" => "For you only, 5 minutes: you sprint 30% faster.",
+            "buff:speed_burst" => "For you only, 15 seconds: you sprint 4 times faster.",
+            "buff:catch" => "For you only, 5 minutes: fish bite 15% more often, you reel 25% faster, and every catch gives $1 to $10 extra.",
+            "buff:catch_big" => "For you only, 5 minutes: fish bite 30% more often, you reel 45% faster, and every catch gives extra money worth 10% to 25% of the fish.",
+            "buff:catch_deluxe" => "For you only, 5 minutes: fish bite 30% more often, you reel 45% faster, and catches give 25% more XP.",
+            "buff:bounce" => "For you only, 20 seconds: you jump twice as high.",
+            "buff:bounce_big" => "For you only, 10 seconds: you jump 4 times as high.",
+            _ => "",
+        };
     }
 
     private sealed class Outcome
@@ -640,7 +661,7 @@ public class Feed : CovePlugin
             }
 
             // what the Buy button lists:  id~Label~price;id~Label~price   and the bet limits of the gamble box
-            string shop = string.Join(";", ShopList(s).Select(i => $"{i.Id}~{Clean(i.Label)}~{i.Price}"));
+            string shop = string.Join(";", ShopList(s).Select(i => $"{i.Id}~{Clean(i.Label)}~{i.Price}~{CleanText(i.Description)}"));
             string gamble = s.GambleEnabled ? $"{s.GambleMin},{s.GambleMax}" : "";
             string feedCooldown = s.CooldownSeconds.ToString();
             if (shop + "|" + gamble + "|" + feedCooldown != publishedShop)
@@ -758,6 +779,13 @@ public class Feed : CovePlugin
     }
 
     private static string Clean(string text) => text.Replace('~', ' ').Replace(';', ' ').Replace(',', ' ').Replace('|', ' ');
+
+    // a description: commas are fine, only the separators of wp_shop go, and it is kept short (lobby data has a size limit)
+    private static string CleanText(string text)
+    {
+        text = text.Replace('~', ' ').Replace(';', ' ').Replace('|', ' ').Replace('\r', ' ').Replace('\n', ' ').Trim();
+        return text.Length > 160 ? text.Substring(0, 160) : text;
+    }
 
     private static List<ShopItem> ShopList(Settings s) => s.Items;
 
@@ -1281,6 +1309,7 @@ public class Feed : CovePlugin
             loadedShopWriteTime = File.GetLastWriteTimeUtc(shopPath);
 
             var items = new List<ShopItem>();
+            var describes = new Dictionary<string, string>();
             foreach (string raw in File.ReadAllLines(shopPath))
             {
                 string line = raw.Trim();
@@ -1321,8 +1350,19 @@ public class Feed : CovePlugin
                     case "buyneedshud":
                         next.BuyNeedsHud = value;
                         break;
+                    case "describe":
+                        // describe = id | what it does
+                        int bar = value.IndexOf('|');
+                        if (bar > 0)
+                            describes[value.Substring(0, bar).Trim().ToLowerInvariant()] = value.Substring(bar + 1).Trim();
+                        else
+                            Log($"shop.txt: \"describe = {value}\" needs: id | text");
+                        break;
                 }
             }
+
+            foreach (ShopItem item in items)
+                item.Description = describes.TryGetValue(item.Id, out string? text) ? text : DefaultDescription(item.Action);
 
             // a file without items means nothing is for sale
             next.Items = items;
@@ -1363,6 +1403,9 @@ public class Feed : CovePlugin
             "#    cooldown  seconds before ANYBODY can buy this again, 0 for none. Admins are not limited.",
             "#    message   optional, said to everyone when it is bought. Leave it out to use buyMessage,",
             "#              or write it empty (a | at the end) to say nothing.",
+            "#",
+            "#  describe = id | text   what players read when they hover over the item in the HUD's Buy menu.",
+            "#              Optional: every action has a built-in description, this line replaces it.",
             "#",
             "#  In messages: %player% (the buyer), %item% (the label), %cost% and %coins% (what they have left).",
             "# ======================================================================",
