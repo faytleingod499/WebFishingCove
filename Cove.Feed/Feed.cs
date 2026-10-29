@@ -147,6 +147,7 @@ public class Feed : CovePlugin
     // the player's Wolfpark HUD (1.17+, which announces itself with !wphud) applies it to their own game.
     private static readonly HashSet<string> BuffDrinks = new() { "speed", "speed_burst", "catch", "catch_big", "catch_deluxe", "bounce", "bounce_big" };
     private const string BuffMarker = "# Feed added the buff items below once";
+    private const string DescribeMarker = "# Feed added the item descriptions below once";
     private readonly HashSet<ulong> hudPlayers = new();
     private readonly Dictionary<ulong, (int Seq, string Drink)> buffGrants = new();
     private readonly Dictionary<ulong, string> publishedBuffs = new();
@@ -1366,6 +1367,9 @@ public class Feed : CovePlugin
 
             // a file without items means nothing is for sale
             next.Items = items;
+
+            AddDefaultDescriptionsOnce(items, describes);
+            loadedShopWriteTime = File.GetLastWriteTimeUtc(shopPath); // our own addition needs no reload
             Log($"Loaded {ShopFileName} ({items.Count} item(s)).");
         }
         catch (Exception e)
@@ -1405,7 +1409,8 @@ public class Feed : CovePlugin
             "#              or write it empty (a | at the end) to say nothing.",
             "#",
             "#  describe = id | text   what players read when they hover over the item in the HUD's Buy menu.",
-            "#              Optional: every action has a built-in description, this line replaces it.",
+            "#              Feed writes one for each item the first time it loads this file, so you can just edit them.",
+            "#              An item without a line uses the built-in description of its action.",
             "#",
             "#  In messages: %player% (the buyer), %item% (the label), %cost% and %coins% (what they have left).",
             "# ======================================================================",
@@ -1452,6 +1457,36 @@ public class Feed : CovePlugin
         };
         File.AppendAllText(shopPath, (text.EndsWith('\n') ? "" : nl) + string.Join(nl, lines));
         Log($"Added the buff items to {ShopFileName}.");
+    }
+
+    // Writes a  describe = id | text  line into shop.txt for every item that has none, once, so the descriptions are
+    // right there to change. Without the marker (or for an item whose line was deleted later) the built-in text is used.
+    private void AddDefaultDescriptionsOnce(List<ShopItem> items, Dictionary<string, string> describes)
+    {
+        string text = File.ReadAllText(shopPath);
+        if (text.Contains(DescribeMarker, StringComparison.Ordinal))
+            return;
+
+        var added = new List<string>();
+        foreach (ShopItem item in items)
+        {
+            string description = DefaultDescription(item.Action);
+            if (description.Length > 0 && !describes.ContainsKey(item.Id))
+                added.Add($"describe = {item.Id} | {description}");
+        }
+        if (added.Count == 0)
+            return;
+
+        string nl = text.Contains("\r\n") ? "\r\n" : "\n";
+        var lines = new List<string>
+        {
+            "",
+            DescribeMarker + ". Change the texts as you like, they are what players read when they hover over an item.",
+        };
+        lines.AddRange(added);
+        lines.Add("");
+        File.AppendAllText(shopPath, (text.EndsWith('\n') ? "" : nl) + string.Join(nl, lines));
+        Log($"Added {added.Count} item description(s) to {ShopFileName}.");
     }
 
     // gambleOutcome = chance | multiplier | message
