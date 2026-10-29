@@ -794,6 +794,18 @@ namespace Cove.Server
         /// </param>
         /// <param name="zone">Name of zone reported by sender</param>
         /// <returns></returns>
+        /// <summary>
+        ///  True for the chat commands the Wolfpark HUD mod sends by itself (its hello and its catch reports). They are
+        ///  not logged and not relayed anywhere, they would drown out everything else.
+        /// </summary>
+        public static bool IsQuietCommand(string message)
+        {
+            if (message == null || !message.StartsWith("!"))
+                return false;
+            string word = message.Split(' ')[0].Substring(1).ToLowerInvariant();
+            return word is "wphud" or "catchcoins";
+        }
+
         void OnPlayerChat(
             string message,
             CSteamID from,
@@ -812,7 +824,11 @@ namespace Cove.Server
 
             // Announcements like "%u ranked up to rank 2" carry %u where the game puts the player's name: fill it in for
             // the console (plugins still get the original text, the Discord bridge looks for the %u itself)
-            if (message.Contains("%u"))
+            if (IsQuietCommand(message))
+            {
+                // the Wolfpark HUD's own housekeeping, sent over and over: not worth a console line
+            }
+            else if (message.Contains("%u"))
                 Log($"[{(local ? "Local" : "Global")}] [{sender.FisherID}] {message.Replace("%u", sender.Username)}");
             else
                 Log($"[{(local ? "Local" : "Global")}] [{sender.FisherID}] {sender.Username}: {message}");

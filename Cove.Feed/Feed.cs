@@ -658,6 +658,7 @@ public class Feed : CovePlugin
                 publishedTitle = "";
                 publishedAdmins = "";
                 SteamMatchmaking.SetLobbyData(lobby, "wp_hud", "1");
+                SteamMatchmaking.SetLobbyData(lobby, "wp_buffs", "1"); // this plugin knows !wphud: the HUD only says hello to servers that do
                 publishedLobby = lobby.m_SteamID;
             }
 
@@ -754,6 +755,7 @@ public class Feed : CovePlugin
             if (lobby.IsValid() && publishedLobby == lobby.m_SteamID)
             {
                 SteamMatchmaking.SetLobbyData(lobby, "wp_hud", "");
+                SteamMatchmaking.SetLobbyData(lobby, "wp_buffs", "");
                 SteamMatchmaking.SetLobbyData(lobby, "wp_shop", "");
                 SteamMatchmaking.SetLobbyData(lobby, "wp_gamble", "");
                 SteamMatchmaking.SetLobbyData(lobby, "wp_feed_cd", "");

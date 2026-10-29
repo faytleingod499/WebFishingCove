@@ -184,6 +184,8 @@ public class DiscordBridge : CovePlugin
             return;
         if (local && !s.RelayLocalChat)
             return;
+        if (CoveServer.IsQuietCommand(message))
+            return;
         if (!s.RelayCommands && message.TrimStart().StartsWith('!'))
             return;
 
