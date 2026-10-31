@@ -35,6 +35,7 @@ public class DiscordBridge : CovePlugin
     private const int MaxLineLength = 500;               // longest chat line sent to Discord
     private const int MaxDiscordMessageLength = 1900;    // Discord's limit is 2000
     private const int MaxGameTextLength = 300;           // longest Discord message shown in game
+    private const int MaxCommandReplyLines = 15;       // longest reply to a Discord command
     private const int MaxFromDiscordPerPoll = 10;       // protects the game chat from a flood
 
     // The same problem is only written to the log this often
@@ -47,7 +48,7 @@ public class DiscordBridge : CovePlugin
     private static readonly Regex ChannelMention = new(@"<#\d+>", RegexOptions.Compiled);
     private static readonly Regex UserMention = new(@"<@!?(\d+)>", RegexOptions.Compiled);
 
-    private sealed record Incoming(ulong Id, string Author, string Text);
+    private sealed record Incoming(ulong Id, ulong AuthorId, string Author, string Text, string Raw);
 
     private sealed class Settings
     {
@@ -64,6 +65,11 @@ public class DiscordBridge : CovePlugin
         public string GamePrefix = "";
         public string GameColor = "ffffff";
         public string InviteUrl = "";
+
+        // Discord user ids (not channel members) that may run server commands from the channel. Empty = feature off.
+        public HashSet<ulong> CommandAdmins = new();
+        public string CommandPrefix = "!";
+        public HashSet<string> BlockedCommands = new(StringComparer.OrdinalIgnoreCase) { "exit", "shutdown" };
 
         public bool Ready => Token.Length > 0 && ChannelId != 0;
 
@@ -107,6 +113,7 @@ public class DiscordBridge : CovePlugin
         try
         {
             EnsureFileExists();
+            AppendMissingKeys();
             Reload();
         }
         catch (Exception e)
@@ -512,11 +519,56 @@ public class DiscordBridge : CovePlugin
                 break;
             }
 
+            // A message that starts with the command prefix from a listed Discord admin is a server command, not chat.
+            // Everyone else's text, including "!ban" typed by someone not on the list, is only ever shown as chat.
+            if (s.CommandAdmins.Count > 0 && s.CommandAdmins.Contains(message.AuthorId)
+                && s.CommandPrefix.Length > 0 && message.Raw.StartsWith(s.CommandPrefix, StringComparison.Ordinal))
+            {
+                RunDiscordCommand(s, message);
+                shown++;
+                continue;
+            }
+
             string tag = s.GamePrefix.Length > 0 ? s.GamePrefix + " " : "";
             ParentServer.messageGlobal($"{tag}{message.Author}: {message.Text}", s.GameColor);
             Log($"Discord {message.Author}: {message.Text}");
             shown++;
         }
+    }
+
+    // Runs one command typed by a Discord admin, as the host, and posts what the command said back to the channel.
+    private void RunDiscordCommand(Settings s, Incoming message)
+    {
+        string body = message.Raw.Substring(s.CommandPrefix.Length).Trim();
+        if (body.Length == 0)
+            return;
+
+        string[] parts = body.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        string command = parts[0];
+        string[] args = parts.Skip(1).ToArray();
+
+        // this goes in the server log so there is always a record of who did what
+        Log($"Discord admin {message.Author} ({message.AuthorId}) ran: {s.CommandPrefix}{body}");
+
+        var replies = new List<string>();
+        bool ran = ParentServer.RunRemoteCommand(command, args, text =>
+        {
+            // a reply can be several lines (!help), keep them as lines but clean each one
+            foreach (string line in text.Split('\n'))
+            {
+                string clean = CleanText(line, MaxLineLength, forGame: false);
+                if (clean.Length > 0 && replies.Count < MaxCommandReplyLines)
+                    replies.Add(clean);
+            }
+        }, s.BlockedCommands);
+
+        string typed = CleanText(s.CommandPrefix + body, 200, forGame: false);
+        Enqueue($":keyboard: **{Escape(message.Author)}** ran **{Escape(typed)}**");
+
+        if (replies.Count == 0)
+            replies.Add(ran ? "Done." : "Nothing happened.");
+        foreach (string line in replies)
+            Enqueue(Escape(line));
     }
 
     private List<Incoming> ParseMessages(string json, out ulong newestId)
@@ -551,6 +603,7 @@ public class DiscordBridge : CovePlugin
                 continue;
 
             string name = GetString(author, "global_name") ?? GetString(author, "username") ?? "someone";
+            ulong.TryParse(GetString(author, "id"), out ulong authorId);
             string content = GetString(message, "content") ?? "";
 
             int attachments = CountItems(message, "attachments");
@@ -588,7 +641,9 @@ public class DiscordBridge : CovePlugin
             if (text.Length == 0)
                 continue; // for example a message that only has an embed
 
-            result.Add(new Incoming(id, CleanText(name, 32, forGame: true), text));
+            // the plain text, for commands: keeps [ ] and quotes (a ban reason), only newlines and control characters go
+            string raw = CleanText(content, MaxGameTextLength, forGame: false);
+            result.Add(new Incoming(id, authorId, CleanText(name, 32, forGame: true), text, raw));
         }
 
         return result;
@@ -818,6 +873,28 @@ public class DiscordBridge : CovePlugin
         next.RelayCommands = ReadBool(values, "relayCommands", false);
         next.RelayLocalChat = ReadBool(values, "relayLocalChat", true);
 
+        if (values.TryGetValue("discordAdmins", out string? adminList) && adminList.Trim().Length > 0)
+        {
+            foreach (string part in adminList.Split(new[] { ',', ' ', ';' }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                if (ulong.TryParse(part, out ulong adminId) && adminId > 0)
+                    next.CommandAdmins.Add(adminId);
+                else
+                    Log($"discordAdmins: \"{part}\" is not a Discord user ID (a long number from \"Copy User ID\"), skipped.");
+            }
+        }
+
+        if (values.TryGetValue("discordCommandPrefix", out string? cmdPrefix) && cmdPrefix.Trim().Length > 0)
+            next.CommandPrefix = cmdPrefix.Trim();
+
+        if (values.TryGetValue("discordBlockedCommands", out string? blockedList))
+        {
+            // an empty value means nothing is blocked, a missing line keeps the default (exit, shutdown)
+            next.BlockedCommands = new HashSet<string>(
+                blockedList.Split(new[] { ',', ' ', ';' }, StringSplitOptions.RemoveEmptyEntries).Select(c => c.TrimStart('!').ToLowerInvariant()),
+                StringComparer.OrdinalIgnoreCase);
+        }
+
         if (values.TryGetValue("gamePrefix", out string? prefix))
             next.GamePrefix = CleanText(prefix, 30, forGame: false);
 
@@ -852,6 +929,10 @@ public class DiscordBridge : CovePlugin
 
         string state = next.Ready ? "on" : "off (botToken or channelId is missing)";
         Log($"The Discord bridge is {state}.");
+        if (next.Ready && next.DiscordToGame)
+            Log(next.CommandAdmins.Count > 0
+                ? $"Discord commands are on for {next.CommandAdmins.Count} admin(s), prefix \"{next.CommandPrefix}\"."
+                : "Discord commands are off (discordAdmins is empty).");
     }
 
     private int ReadInt(Dictionary<string, string> values, string key, int fallback, int min, int max)
@@ -941,6 +1022,33 @@ public class DiscordBridge : CovePlugin
         return values;
     }
 
+    // An existing discordbridge.txt does not get new settings by itself: add the Discord command ones (switched off)
+    // so the owner only has to fill in discordAdmins.
+    private void AppendMissingKeys()
+    {
+        string text = File.ReadAllText(filePath);
+        bool hasKey = text.Split('\n').Any(l => l.TrimStart().StartsWith("discordAdmins", StringComparison.OrdinalIgnoreCase));
+        if (hasKey)
+            return;
+
+        string nl = text.Contains("\r\n") ? "\r\n" : "\n";
+        string[] lines =
+        {
+            "",
+            "# Run server commands from Discord (added by an update). discordAdmins = Discord USER ids, separated by",
+            "# commas (Developer Mode > right click a person > Copy User ID). Only these people can run commands, as the",
+            "# host, by typing them in the channel like !kick Name. Empty = no commands. Whoever controls one of these",
+            "# Discord accounts controls your server: keep two-factor on and the list short.",
+            "# discordBlockedCommands never run from Discord (default exit,shutdown; empty allows everything).",
+            "discordAdmins =",
+            "discordCommandPrefix = !",
+            "discordBlockedCommands = exit,shutdown",
+            "",
+        };
+        File.AppendAllText(filePath, string.Join(nl, lines));
+        Log($"Added the Discord command settings to {FileName}. Put your Discord user ID in discordAdmins to use them.");
+    }
+
     private void EnsureFileExists()
     {
         if (File.Exists(filePath))
@@ -995,6 +1103,15 @@ public class DiscordBridge : CovePlugin
             "#  inviteUrl         = optional. Your Discord server's invite link, like https://discord.gg/abc123.",
             "#                      Players type !discord in the game to get it. Works without a bot.",
             "#",
+            "#  discordAdmins     = optional. Discord USER ids (Developer Mode > right click a person >",
+            "#                      Copy User ID), separated by commas. ONLY these people can run server",
+            "#                      commands from the channel, as the host. Empty = no commands. Anyone",
+            "#                      who controls one of these Discord accounts controls your server, so",
+            "#                      keep two-factor on and keep the list short.",
+            "#  discordCommandPrefix = what a command starts with in Discord, default !   (like !kick Name)",
+            "#  discordBlockedCommands = commands that never run from Discord, default exit,shutdown.",
+            "#                      Set it to nothing to allow everything.",
+            "#",
             "#  You can edit and save this file while the server is running, it is",
             "#  picked up within about 10 seconds.",
             "# ======================================================================",
@@ -1014,6 +1131,10 @@ public class DiscordBridge : CovePlugin
             "gamePrefix =",
             "gameColor = ffffff",
             "inviteUrl =",
+            "",
+            "discordAdmins =",
+            "discordCommandPrefix = !",
+            "discordBlockedCommands = exit,shutdown",
             "",
         };
 

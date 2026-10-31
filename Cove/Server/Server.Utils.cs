@@ -298,7 +298,8 @@ namespace Cove.Server
                 if (id.m_SteamID == SteamUser.GetSteamID().m_SteamID)
                 {
                     Log($"{message}");
-                    return;
+                    remoteReplySink?.Invoke(message);
+                    continue; // the host is not a network peer, but keep going so every chunk is shown
                 }
 
                 sendPacketToPlayer(chatPacket, id);
