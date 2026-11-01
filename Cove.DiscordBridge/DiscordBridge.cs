@@ -60,6 +60,7 @@ public class DiscordBridge : CovePlugin
         public bool RelayServerEvents = true;
         public bool RelayCommands;
         public bool RelayLocalChat = true;
+        public bool TagChat = true;
         public string WebhookUrl = "";
         public bool Debug;
         public string GamePrefix = "";
@@ -205,11 +206,19 @@ public class DiscordBridge : CovePlugin
         // not something they said, so they are posted as a plain line instead of under their name.
         if (text.Contains("%u"))
         {
-            Enqueue($"*{Escape(text.Replace("%u", NameOf(sender)))}*");
+            Enqueue($"{Tag(s, local)}*{Escape(text.Replace("%u", NameOf(sender)))}*");
             return;
         }
 
-        Enqueue(Escape(text), NameOf(sender));
+        Enqueue(Tag(s, local) + Escape(text), NameOf(sender));
+    }
+
+    // "[Global] " or "[Local] " in front of a chat line, the same words the server console uses
+    private static string Tag(Settings s, bool local)
+    {
+        if (!s.TagChat)
+            return "";
+        return local ? "\\[Local\\] " : "\\[Global\\] ";
     }
 
     // Packet Guard bans (attack packets) go to the channel too, whatever else is relayed
@@ -872,6 +881,7 @@ public class DiscordBridge : CovePlugin
         next.RelayServerEvents = ReadBool(values, "relayServerEvents", true);
         next.RelayCommands = ReadBool(values, "relayCommands", false);
         next.RelayLocalChat = ReadBool(values, "relayLocalChat", true);
+        next.TagChat = ReadBool(values, "tagChat", true);
 
         if (values.TryGetValue("discordAdmins", out string? adminList) && adminList.Trim().Length > 0)
         {
@@ -1091,6 +1101,8 @@ public class DiscordBridge : CovePlugin
             "#                      is how in game commands are typed. Normally off.",
             "#  relayLocalChat    = true or false. Also post local chat, the kind only",
             "#                      nearby players can hear in the game.",
+            "#  tagChat           = true or false. Put [Global] or [Local] in front of chat lines,",
+            "#                      like the server console does. Default true.",
             "#  webhookUrl        = optional. A webhook for the SAME channel (Edit Channel >",
             "#                      Integrations > Webhooks > New Webhook > Copy Webhook URL).",
             "#                      With it, game chat appears under each player's name",
