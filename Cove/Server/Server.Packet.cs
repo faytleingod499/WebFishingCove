@@ -109,6 +109,8 @@ namespace Cove.Server
                 return; // never process anything from a banned player
             }
 
+            ApplyPendingPlayerActor(sender);
+
             Dictionary<string, object> packetInfo;
             GodotReader.ForbiddenValue = null;
             int unpackedSize;
@@ -222,31 +224,8 @@ namespace Cove.Server
 
                         if (type == "player")
                         {
-                            WFPlayer thisPlayer = AllPlayers.Find(p => p.SteamId.m_SteamID == sender.m_SteamID);
-                            if (thisPlayer == null)
-                                Log("No fisher found for player instance!");
-                            else
-                            {
-                                thisPlayer.InstanceID = actorID;
-
-                                // a client can send this more than once, don't track (or announce) the same player twice
-                                bool alreadyTracked = allActors.Contains(thisPlayer);
-                                if (!alreadyTracked)
-                                    allActors.Add(thisPlayer); // add the player to the actor list
-
-                                if (!alreadyTracked)
-                                {
-                                    // print out a join message
-                                    Log($"[{thisPlayer.FisherID}] {thisPlayer.Username} joined. [{AllPlayers.Count}/{MaxPlayers}]");
-                                    GuardLog($"JOINED    {thisPlayer.SteamId.m_SteamID} ({GuardSafe(thisPlayer.Username, 40)}): game finished joining [{AllPlayers.Count}/{MaxPlayers}]");
-                                    sendWebLobbyPacket(thisPlayer.SteamId);
-                                    updatePlayercount();
-
-                                    foreach (var p in loadedPlugins.ToList())
-                                        SafePluginCall(p, () => p.plugin.onPlayerJoin(thisPlayer));
-                                }
-                            }
-
+                            if (!RegisterPlayerActor(sender, actorID))
+                                KeepPendingPlayerActor(sender, actorID); // not in the player list yet: registered when it is
                         } else {
                             WFActor cActor = new WFActor(actorID, type, Vector3.zero, Vector3.zero);
                             cActor.owner = sender;

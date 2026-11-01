@@ -30,6 +30,7 @@ namespace Cove.Server
         private const int GuardMaxText = 4096;          // longest text allowed anywhere in an actor action
         private const int GuardMaxActionsPerSecond = 300;
         private const int GuardMaxUnknownPerMinute = 100;
+        private const int GuardMaxUnknownUnregisteredPerMinute = 1500; // for a player the server has no character for (join race)
         private const int GuardMaxDepth = 16;
         // a sound is a node name in the player's sound_manager, never a path
         // a sound is a node name in the player's sound_manager: letters, numbers, _ and -, never a path
@@ -45,6 +46,9 @@ namespace Cove.Server
             public int UnknownThisMinute;
             public long GarbageStart;
             public int GarbageCount;
+            // what the "unknown actor" counter counted this minute (for the log when it bans)
+            public Dictionary<long, int> UnknownIds = new();
+            public Dictionary<string, int> UnknownActions = new();
         }
 
         private readonly Dictionary<ulong, GuardStats> guardStats = new();
@@ -131,14 +135,29 @@ namespace Cove.Server
             if (TryGetLong(packet, "actor_id", out long actorId) && !allActors.Any(a => a.InstanceID == actorId)
                 && !serverOwnedInstances.Any(a => a.InstanceID == actorId))
             {
+                // A player whose own character the server never registered (the join didn't finish) would have every action
+                // counted as "for an actor that doesn't exist". That is the server's gap, not an attack, so such a player gets a
+                // much higher limit (still far below a real flood) and a note in the log.
+                bool registered = allActors.Any(a => a is WFPlayer wp && wp.SteamId.m_SteamID == id);
+                int unknownLimit = registered ? GuardMaxUnknownPerMinute : GuardMaxUnknownUnregisteredPerMinute;
+                if (!registered)
+                    GuardNote(id, "unregistered", $"UNKNOWN   {id} ({GuardSafe(GuardNameOf(sender), 40)}): actions for actor {actorId} ({GuardSafe(action, 40)}) while this player's own character is not registered on the server (limit {unknownLimit} a minute)");
                 if (now - stats.MinuteStart >= 60_000)
                 {
                     stats.MinuteStart = now;
                     stats.UnknownThisMinute = 0;
+                    stats.UnknownIds.Clear();
+                    stats.UnknownActions.Clear();
                 }
-                if (++stats.UnknownThisMinute > GuardMaxUnknownPerMinute)
+                if (stats.UnknownIds.Count < 8 || stats.UnknownIds.ContainsKey(actorId))
+                    stats.UnknownIds[actorId] = stats.UnknownIds.GetValueOrDefault(actorId) + 1;
+                string actionKey = GuardSafe(action, 40);
+                if (stats.UnknownActions.Count < 8 || stats.UnknownActions.ContainsKey(actionKey))
+                    stats.UnknownActions[actionKey] = stats.UnknownActions.GetValueOrDefault(actionKey) + 1;
+                if (++stats.UnknownThisMinute > unknownLimit)
                 {
-                    GuardBan(sender, $"the action queue flood (more than {GuardMaxUnknownPerMinute} actions a minute for actors that don't exist, which makes other players' games dump them into their logs)");
+                    GuardLog($"DETAIL    {id}: actors counted this minute: {string.Join(" ", stats.UnknownIds.Select(k => $"{k.Key}x{k.Value}"))}; actions: {string.Join(" ", stats.UnknownActions.Select(k => $"{k.Key}x{k.Value}"))}");
+                    GuardBan(sender, $"the action queue flood (more than {unknownLimit} actions a minute for actors that don't exist, which makes other players' games dump them into their logs)");
                     return true;
                 }
             }
