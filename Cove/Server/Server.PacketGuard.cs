@@ -55,6 +55,7 @@ namespace Cove.Server
         private readonly HashSet<ulong> guardBanned = new();
 
         private const int GuardMaxGarbagePer10s = 50;
+        private const int GuardMaxAnimationValues = 64; // the game sends exactly 24; mods that add animation values send more
 
         /// <summary>A packet that couldn't be read: the game never sends those, a flood of them is an attack on the server.</summary>
         internal void GuardGarbage(CSteamID sender)
@@ -201,7 +202,7 @@ namespace Cove.Server
                     break;
                 case "actor_animation_update":
                     malformed = !TryGetLong(packet, "actor_id", out _)
-                        || !packet.TryGetValue("data", out object? data) || data is not Dictionary<int, object> list || list.Count > 24;
+                        || !packet.TryGetValue("data", out object? data) || data is not Dictionary<int, object> list || list.Count > GuardMaxAnimationValues;
                     break;
                 case "message":
                     malformed = !packet.ContainsKey("color") || !packet.ContainsKey("zone_owner");
@@ -209,6 +210,8 @@ namespace Cove.Server
             }
             if (malformed)
             {
+                string shape = packet.TryGetValue("data", out object? shown) && shown is Dictionary<int, object> shownList ? $"data has {shownList.Count} values" : (packet.TryGetValue("data", out shown) ? $"data is {shown?.GetType().Name ?? "null"}" : "no data");
+                GuardNote(id, "malformed-" + type, $"MALFORMED {id} ({GuardSafe(GuardNameOf(sender), 40)}): {type} packet the server can't use ({shape}; keys: {GuardSafe(string.Join(",", packet.Keys), 80)})");
                 GuardGarbage(sender);
                 return true;
             }
