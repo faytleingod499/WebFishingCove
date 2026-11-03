@@ -211,7 +211,8 @@ namespace Cove.Server
             if (malformed)
             {
                 string shape = packet.TryGetValue("data", out object? shown) && shown is Dictionary<int, object> shownList ? $"data has {shownList.Count} values" : (packet.TryGetValue("data", out shown) ? $"data is {shown?.GetType().Name ?? "null"}" : "no data");
-                GuardNote(id, "malformed-" + type, $"MALFORMED {id} ({GuardSafe(GuardNameOf(sender), 40)}): {type} packet the server can't use ({shape}; keys: {GuardSafe(string.Join(",", packet.Keys), 80)})");
+                ulong senderId = sender.m_SteamID;
+                GuardNote(senderId, "malformed-" + type, $"MALFORMED {senderId} ({GuardSafe(GuardNameOf(sender), 40)}): {type} packet the server can't use ({shape}; keys: {GuardSafe(string.Join(",", packet.Keys), 80)})");
                 GuardGarbage(sender);
                 return true;
             }
