@@ -795,7 +795,7 @@ namespace Cove.Server
         /// <param name="zone">Name of zone reported by sender</param>
         /// <returns></returns>
         /// <summary>
-        ///  True for the chat commands the Wolfpark HUD mod sends by itself (its hello and its catch reports). They are
+        ///  True for the chat commands the Wolfpark HUD mod sends by itself (its hello, its catch reports and the admin ban list). They are
         ///  not logged and not relayed anywhere, they would drown out everything else.
         /// </summary>
         public static bool IsQuietCommand(string message)
@@ -803,7 +803,7 @@ namespace Cove.Server
             if (message == null || !message.StartsWith("!"))
                 return false;
             string word = message.Split(' ')[0].Substring(1).ToLowerInvariant();
-            return word is "wphud" or "catchcoins";
+            return word is "wphud" or "catchcoins" or "banlist";
         }
 
         void OnPlayerChat(

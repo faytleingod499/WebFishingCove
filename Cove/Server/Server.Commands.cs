@@ -312,6 +312,8 @@ namespace Cove.Server
                 "Shows a list of previous players that were connected to the server"
             );
             SetCommandAccess("prev", CommandAccess.Admin);
+
+            RegisterBanListCommands(); // !banlist and !banreason (Server.BanList.cs)
         }
 
         public void RegisterCommand(string command, Action<WFPlayer, string[]> cb, string[]? aliases = null)
