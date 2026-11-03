@@ -143,6 +143,8 @@ namespace Cove.Server
             string entry = $"{id.m_SteamID} # ";
             string username = PreviousPlayers.Find(p => p.SteamId == id)?.Username ?? "Unknown";
             entry += username;
+            // one line, no control characters: a reason with a line break would split the entry (or fake a second one)
+            reason = CleanBanText(reason, 200);
             if (!string.IsNullOrEmpty(reason))
                 entry += $" - {reason}";
             // check if the file is already opened by another process
