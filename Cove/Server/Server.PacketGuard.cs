@@ -29,7 +29,7 @@ namespace Cove.Server
 
         private const int GuardMaxText = 4096;          // longest text allowed anywhere in an actor action
         private const int GuardMaxActionsPerSecond = 300;
-        private const int GuardMaxUnknownPerMinute = 100;
+        private const int GuardMaxUnknownPerMinute = 600; // natalie reached 101 a minute just changing zones with mod actors the server never sees
         private const int GuardMaxUnknownUnregisteredPerMinute = 1500; // for a player the server has no character for (join race)
         private const int GuardMaxDepth = 16;
         // a sound is a node name in the player's sound_manager, never a path
