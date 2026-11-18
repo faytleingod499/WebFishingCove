@@ -115,6 +115,19 @@ public class Greetings : CovePlugin
         }
     }
 
+    // a player's name changed on Steam: their entry in greetings-players.json is found by Steam ID and corrected
+    public override void onPlayerRenamed(ulong steamId, string oldName, string newName)
+    {
+        base.onPlayerRenamed(steamId, oldName, newName);
+        lock (sync)
+        {
+            if (!known.TryGetValue(steamId, out KnownPlayer? record) || record.Name == newName)
+                return;
+            record.Name = newName;
+            SavePlayers();
+        }
+    }
+
     public override void onNetworkPacket(WFPlayer sender, Dictionary<string, object> packet)
     {
         base.onNetworkPacket(sender, packet);

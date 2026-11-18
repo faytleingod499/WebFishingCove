@@ -144,6 +144,19 @@ public class ChalkSaves : CovePlugin
         ClearLobbyData();
     }
 
+    // a player's name changed on Steam: the remembered owner name (shown for them in the admin list while they are
+    // offline) is found by Steam ID and corrected. The name inside old save files is replaced the next time they save.
+    public override void onPlayerRenamed(ulong steamId, string oldName, string newName)
+    {
+        base.onPlayerRenamed(steamId, oldName, newName);
+        lock (fileLock)
+        {
+            if (ownerNames.ContainsKey(steamId))
+                ownerNames[steamId] = newName;
+        }
+        publishDirty = true;
+    }
+
     public override void onPlayerJoin(WFPlayer player)
     {
         base.onPlayerJoin(player);

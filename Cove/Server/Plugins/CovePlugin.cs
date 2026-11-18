@@ -93,6 +93,13 @@ namespace Cove.Server.Plugins
         /// <param name="player">If unknown, this will be an empty string</param>
         /// <param name="reason">If not given, this will be an empty string</param>
         public virtual void onPlayerBanned(WFPlayer player, string reason) { }
+
+        /// <summary>
+        /// Triggered when the Steam name of a player who is online changes, and once after a player joins (with an
+        /// empty oldName) so a plugin that saved their name can bring it up to date. Find your saved entry by
+        /// steamId and set its name to newName. oldName is empty when this is only the check after joining.
+        /// </summary>
+        public virtual void onPlayerRenamed(ulong steamId, string oldName, string newName) { }
         // triggered when a packet arrives
         public virtual void onNetworkPacket(WFPlayer sender, Dictionary<string, object> packet) { }
 

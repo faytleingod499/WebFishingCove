@@ -351,6 +351,19 @@ public class Feed : CovePlugin
         publishDirty = true;
     }
 
+    // a player's name changed on Steam: their entry (the name on the leaderboard) is found by Steam ID and corrected
+    public override void onPlayerRenamed(ulong steamId, string oldName, string newName)
+    {
+        base.onPlayerRenamed(steamId, oldName, newName);
+        lock (sync)
+        {
+            if (!counts.TryGetValue(steamId, out Record? record) || record.Name == newName)
+                return;
+            record.Name = newName;
+            SaveCounts();
+        }
+    }
+
     public override void onPlayerLeave(WFPlayer player)
     {
         base.onPlayerLeave(player);

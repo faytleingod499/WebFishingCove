@@ -77,6 +77,16 @@ namespace Cove.Server.HostedServices
                     server.SafePluginCall(plugin, () => plugin.plugin.onUpdate());
                 }
 
+                // keeps the names saved for players in step with their Steam names (looks at most every few seconds)
+                try
+                {
+                    server.CheckPlayerNames();
+                }
+                catch (Exception e)
+                {
+                    _logger.LogError("Name check failed: " + e);
+                }
+
                 CrashWatch.Busy("tick", "waiting for the state lock (actor updates)");
                 lock (server.serverActorListLock)
                 {

@@ -398,6 +398,9 @@ namespace Cove.Server
 
                     Log($"[{steamID}] {Username} is attempting to join the lobby.");
 
+                    // Steam may still be handing out an old copy of this player's name, so ask for a fresh one now
+                    RequestSteamNameRefresh(userChanged, true);
+
                     connectionsQueued.Add(userChanged);
                 }
 
