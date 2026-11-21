@@ -181,6 +181,39 @@ public class ChalkSaves : CovePlugin
     //   wp_cs<SteamID>   = that player's save names, "name,name,name"
     //   wp_co<SteamID>   = a share waiting for that player, "from~name", or empty
     // The mod then uses the normal commands, so every check above still applies.
+    // Steam keeps only so much lobby data in total and drops a write that does not fit without any error. So every
+    // write is read back, only counted as published when it is really there, and tried again a few seconds later.
+    private static bool lobbyWriteFailed;
+    private static long lastWriteFailLogTick;
+
+    private static bool PutLobby(CSteamID lobby, string key, string value)
+    {
+        bool ok = false;
+        try
+        {
+            ok = SteamMatchmaking.SetLobbyData(lobby, key, value) && SteamMatchmaking.GetLobbyData(lobby, key) == value;
+        }
+        catch (Exception)
+        {
+            ok = false;
+        }
+        if (!ok)
+            lobbyWriteFailed = true;
+        return ok;
+    }
+
+    private static bool StillThere(CSteamID lobby, string key, string value)
+    {
+        try
+        {
+            return SteamMatchmaking.GetLobbyData(lobby, key) == value;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
     private void PublishLobbyData()
     {
         long now = Environment.TickCount64;
@@ -206,10 +239,10 @@ public class ChalkSaves : CovePlugin
             }
 
             string info = $"{(saveAdminsOnly ? 0 : 1)},{(loadAdminsOnly ? 0 : 1)},{maxSaves},{loadCooldownSeconds}";
-            if (info != publishedInfo)
+            if (info != publishedInfo || !StillThere(lobby, "wp_chalk", info))
             {
-                SteamMatchmaking.SetLobbyData(lobby, "wp_chalk", info);
-                publishedInfo = info;
+                if (PutLobby(lobby, "wp_chalk", info))
+                    publishedInfo = info;
             }
 
             var lists = new Dictionary<ulong, string>();
@@ -269,6 +302,17 @@ public class ChalkSaves : CovePlugin
             }
             Publish(lobby, "wp_ca", ownersFor, publishedOwners);
             Publish(lobby, "wp_cb", browseFor, publishedBrowse);
+
+            if (lobbyWriteFailed)
+            {
+                lobbyWriteFailed = false;
+                nextPublishTick = Environment.TickCount64 + 3000;
+                if (Environment.TickCount64 - lastWriteFailLogTick > 60_000)
+                {
+                    lastWriteFailLogTick = Environment.TickCount64;
+                    Log("Steam did not keep some of the HUD lobby data, trying again soon. The lobby data may be full.");
+                }
+            }
         }
         catch (Exception e)
         {
@@ -280,17 +324,17 @@ public class ChalkSaves : CovePlugin
     {
         foreach (var pair in wanted)
         {
-            if (published.TryGetValue(pair.Key, out string? old) && old == pair.Value)
+            if (published.TryGetValue(pair.Key, out string? old) && old == pair.Value && StillThere(lobby, prefix + pair.Key, pair.Value))
                 continue;
-            SteamMatchmaking.SetLobbyData(lobby, prefix + pair.Key, pair.Value);
-            published[pair.Key] = pair.Value;
+            if (PutLobby(lobby, prefix + pair.Key, pair.Value))
+                published[pair.Key] = pair.Value;
         }
 
         // players who left, so the lobby data does not grow forever
         foreach (ulong gone in published.Keys.Where(id => !wanted.ContainsKey(id)).ToList())
         {
-            SteamMatchmaking.SetLobbyData(lobby, prefix + gone, "");
-            published.Remove(gone);
+            if (PutLobby(lobby, prefix + gone, ""))
+                published.Remove(gone);
         }
     }
 

@@ -648,6 +648,49 @@ public class Feed : CovePlugin
 
     // The coins of every player are written into the Steam lobby data as  wp_p<SteamID> = "coins,feeds", next to
     // the marker  wp_hud = 1  that tells the mod this is a server it should show itself on.
+    // Steam keeps only so much lobby data in total, and a write that does not fit is dropped without any error
+    // (a player who joined late then had no admin buttons until the plugins were reloaded). So every write is
+    // read back, only counted as published when it really is there, and tried again a few seconds later if not.
+    private bool hudWriteFailed;
+    private long lastWriteFailLogTick;
+
+    private bool PutLobby(CSteamID lobby, string key, string value)
+    {
+        bool ok = false;
+        try
+        {
+            ok = SteamMatchmaking.SetLobbyData(lobby, key, value) && SteamMatchmaking.GetLobbyData(lobby, key) == value;
+        }
+        catch (Exception)
+        {
+            ok = false;
+        }
+        if (!ok)
+        {
+            hudWriteFailed = true;
+            long now = Environment.TickCount64;
+            if (now - lastWriteFailLogTick > 60_000)
+            {
+                lastWriteFailLogTick = now;
+                Log($"Steam did not keep the lobby data '{key}' ({value.Length} characters), trying again soon. The lobby data may be full.");
+            }
+        }
+        return ok;
+    }
+
+    // true when the value is still what we wrote (Steam can lose data)
+    private static bool StillThere(CSteamID lobby, string key, string value)
+    {
+        try
+        {
+            return SteamMatchmaking.GetLobbyData(lobby, key) == value;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
     private void PublishLobbyData(Settings s)
     {
         long now = Environment.TickCount64;
@@ -670,38 +713,41 @@ public class Feed : CovePlugin
                 publishedShop = "";
                 publishedTitle = "";
                 publishedAdmins = "";
-                SteamMatchmaking.SetLobbyData(lobby, "wp_hud", "1");
-                SteamMatchmaking.SetLobbyData(lobby, "wp_buffs", "1"); // this plugin knows !wphud: the HUD only says hello to servers that do
-                publishedLobby = lobby.m_SteamID;
+                bool marked = PutLobby(lobby, "wp_hud", "1");
+                marked &= PutLobby(lobby, "wp_buffs", "1"); // this plugin knows !wphud: the HUD only says hello to servers that do
+                if (marked)
+                    publishedLobby = lobby.m_SteamID;
             }
 
             // what the Buy button lists:  id~Label~price;id~Label~price   and the bet limits of the gamble box
             string shop = string.Join(";", ShopList(s).Select(i => $"{i.Id}~{Clean(i.Label)}~{i.Price}~{CleanText(i.Description)}"));
             string gamble = s.GambleEnabled ? $"{s.GambleMin},{s.GambleMax}" : "";
             string feedCooldown = s.CooldownSeconds.ToString();
-            if (shop + "|" + gamble + "|" + feedCooldown != publishedShop)
+            if (shop + "|" + gamble + "|" + feedCooldown != publishedShop || !StillThere(lobby, "wp_shop", shop))
             {
-                SteamMatchmaking.SetLobbyData(lobby, "wp_shop", shop);
-                SteamMatchmaking.SetLobbyData(lobby, "wp_gamble", gamble);
-                SteamMatchmaking.SetLobbyData(lobby, "wp_feed_cd", feedCooldown); // for the cooldown bar of the Feed Wolves button
-                publishedShop = shop + "|" + gamble + "|" + feedCooldown;
+                bool shopOk = PutLobby(lobby, "wp_shop", shop);
+                shopOk &= PutLobby(lobby, "wp_gamble", gamble);
+                shopOk &= PutLobby(lobby, "wp_feed_cd", feedCooldown); // for the cooldown bar of the Feed Wolves button
+                if (shopOk)
+                    publishedShop = shop + "|" + gamble + "|" + feedCooldown;
             }
 
             string title = s.HudTitle + "|" + s.HudTitleColor + "|" + s.HudChatColor;
-            if (title != publishedTitle)
+            if (title != publishedTitle || !StillThere(lobby, "wp_title", s.HudTitle))
             {
-                SteamMatchmaking.SetLobbyData(lobby, "wp_title", s.HudTitle);
-                SteamMatchmaking.SetLobbyData(lobby, "wp_title_color", s.HudTitleColor);
-                SteamMatchmaking.SetLobbyData(lobby, "wp_chat_color", s.HudChatColor); // what colour the mod gives server messages
-                publishedTitle = title;
+                bool titleOk = PutLobby(lobby, "wp_title", s.HudTitle);
+                titleOk &= PutLobby(lobby, "wp_title_color", s.HudTitleColor);
+                titleOk &= PutLobby(lobby, "wp_chat_color", s.HudChatColor); // what colour the mod gives server messages
+                if (titleOk)
+                    publishedTitle = title;
             }
 
             // the admins who are online (the HUD shows them the kick / ban panel; the server still checks every command)
             string admins = string.Join(",", GetAllPlayers().Where(admin => IsPlayerAdmin(admin)).Select(admin => admin.SteamId.m_SteamID.ToString()));
-            if (admins != publishedAdmins)
+            if (admins != publishedAdmins || !StillThere(lobby, "wp_admins", admins))
             {
-                SteamMatchmaking.SetLobbyData(lobby, "wp_admins", admins);
-                publishedAdmins = admins;
+                if (PutLobby(lobby, "wp_admins", admins))
+                    publishedAdmins = admins;
             }
 
             var wanted = new Dictionary<ulong, string>();
@@ -720,17 +766,17 @@ public class Feed : CovePlugin
 
             foreach (var pair in wanted)
             {
-                if (published.TryGetValue(pair.Key, out string? old) && old == pair.Value)
+                if (published.TryGetValue(pair.Key, out string? old) && old == pair.Value && StillThere(lobby, "wp_p" + pair.Key, pair.Value))
                     continue;
-                SteamMatchmaking.SetLobbyData(lobby, "wp_p" + pair.Key, pair.Value);
-                published[pair.Key] = pair.Value;
+                if (PutLobby(lobby, "wp_p" + pair.Key, pair.Value))
+                    published[pair.Key] = pair.Value;
             }
 
             // players who left, so the lobby data does not grow forever
             foreach (ulong gone in published.Keys.Where(id => !wanted.ContainsKey(id)).ToList())
             {
-                SteamMatchmaking.SetLobbyData(lobby, "wp_p" + gone, "");
-                published.Remove(gone);
+                if (PutLobby(lobby, "wp_p" + gone, ""))
+                    published.Remove(gone);
             }
 
             // the last buff each player bought:  wp_b<SteamID> = "number,drink". The HUD applies it when the number goes up
@@ -743,15 +789,22 @@ public class Feed : CovePlugin
             }
             foreach (var pair in wantedBuffs)
             {
-                if (publishedBuffs.TryGetValue(pair.Key, out string? oldBuff) && oldBuff == pair.Value)
+                if (publishedBuffs.TryGetValue(pair.Key, out string? oldBuff) && oldBuff == pair.Value && StillThere(lobby, "wp_b" + pair.Key, pair.Value))
                     continue;
-                SteamMatchmaking.SetLobbyData(lobby, "wp_b" + pair.Key, pair.Value);
-                publishedBuffs[pair.Key] = pair.Value;
+                if (PutLobby(lobby, "wp_b" + pair.Key, pair.Value))
+                    publishedBuffs[pair.Key] = pair.Value;
             }
             foreach (ulong gone in publishedBuffs.Keys.Where(id => !wantedBuffs.ContainsKey(id)).ToList())
             {
-                SteamMatchmaking.SetLobbyData(lobby, "wp_b" + gone, "");
-                publishedBuffs.Remove(gone);
+                if (PutLobby(lobby, "wp_b" + gone, ""))
+                    publishedBuffs.Remove(gone);
+            }
+
+            if (hudWriteFailed)
+            {
+                // something did not stick: look again in a few seconds instead of after the full wait
+                hudWriteFailed = false;
+                nextPublishTick = Environment.TickCount64 + 3_000;
             }
         }
         catch (Exception e)
