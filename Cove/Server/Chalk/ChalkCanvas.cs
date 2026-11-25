@@ -16,8 +16,24 @@ namespace Cove.Server.Chalk
         NONE = -1,
     };
 
+    /// <summary>One cell whose colour changed: where it is, what it was and what it is now (-1 = empty).</summary>
+    public readonly record struct ChalkChange(float X, float Y, long Old, long New);
+
     public class ChalkCanvas
     {
+        /// <summary>
+        /// Raised after cells of any canvas really changed colour (canvas id, Steam ID of the player who caused it, the
+        /// cells). The Steam ID is 0 when the server itself did it (a plugin, !clearchalk, a restore). Handlers run on
+        /// the thread that changed the chalk, so they must be quick and must not take locks: queue the work and leave.
+        /// </summary>
+        public static event Action<long, ulong, ChalkChange[]>? CellsChanged;
+
+        /// <summary>Set by the packet handler while it applies a player's chalk packet, so the change can be blamed on them.</summary>
+        [ThreadStatic] public static ulong CurrentActor;
+
+        /// <summary>While true on the calling thread, changes are not reported (used when chalk is restored at startup).</summary>
+        [ThreadStatic] public static bool SuppressChanges;
+
         public long canvasID;
         private readonly CoveServer server;
         public readonly Dictionary<Vector2, long> chalkImage = new Dictionary<Vector2, long>();
@@ -59,6 +75,8 @@ namespace Cove.Server.Chalk
             // The data comes straight from a client packet, so every cast has to be checked. A malformed cell is
             // skipped instead of throwing, which used to abort the whole packet and any plugin hooks after it.
             // chalkImage is also read by the thread that syncs chalk to joining players, hence the lock.
+            List<ChalkChange>? changes = null;
+
             lock (chalkImage)
             {
                 foreach (var transformation in transformations.Values)
@@ -81,8 +99,12 @@ namespace Cove.Server.Chalk
                     {
                         // Erasing chalk that is already stored outside the canvas (old data, or the check was off at the
                         // time) is allowed and removes it. Nothing new is ever added there.
-                        if (color == (long)COLOR.NONE && chalkImage.Remove(coords))
+                        if (color == (long)COLOR.NONE && chalkImage.TryGetValue(coords, out long removedColor) && chalkImage.Remove(coords))
+                        {
+                            if (removedColor != (long)COLOR.NONE)
+                                (changes ??= new List<ChalkChange>()).Add(new ChalkChange(coords.x, coords.y, removedColor, (long)COLOR.NONE));
                             continue;
+                        }
 
                         rejectedOutsideCanvas++;
                         continue;
@@ -91,7 +113,30 @@ namespace Cove.Server.Chalk
                     if (chalkImage.Count >= MaxCells && !chalkImage.ContainsKey(coords))
                         continue;
 
+                    long before = chalkImage.TryGetValue(coords, out long previous) ? previous : (long)COLOR.NONE;
                     chalkImage[coords] = color;
+                    if (before != color)
+                        (changes ??= new List<ChalkChange>()).Add(new ChalkChange(coords.x, coords.y, before, color));
+                }
+            }
+
+            // reported after the lock is released, a handler must never run while chalkImage is locked
+            if (changes != null && !SuppressChanges)
+            {
+                Action<long, ulong, ChalkChange[]>? handlers = CellsChanged;
+                if (handlers != null)
+                {
+                    foreach (Delegate handler in handlers.GetInvocationList())
+                    {
+                        try
+                        {
+                            ((Action<long, ulong, ChalkChange[]>)handler)(canvasID, CurrentActor, changes.ToArray());
+                        }
+                        catch
+                        {
+                            // a broken plugin must not stop the chalk from being drawn
+                        }
+                    }
                 }
             }
         }

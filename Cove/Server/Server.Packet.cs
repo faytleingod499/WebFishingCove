@@ -319,7 +319,15 @@ namespace Cove.Server
                         }
 
                         int rejectedBefore = canvas.rejectedOutsideCanvas;
-                        canvas.chalkUpdate(chalkData);
+                        Chalk.ChalkCanvas.CurrentActor = sender.m_SteamID; // so a chalk history can say who drew it
+                        try
+                        {
+                            canvas.chalkUpdate(chalkData);
+                        }
+                        finally
+                        {
+                            Chalk.ChalkCanvas.CurrentActor = 0;
+                        }
                         int rejected = canvas.rejectedOutsideCanvas - rejectedBefore;
                         if (rejected > 0)
                         {

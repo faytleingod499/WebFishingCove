@@ -351,8 +351,17 @@ public class ChalkPersist : CovePlugin
                 }
             }
 
-            foreach (Cell cell in loaded[id])
-                canvas.chalkUpdate(new Vector2(cell.X, cell.Y), cell.Color);
+            // the restore is not somebody drawing, keep it out of the chalk history
+            ChalkCanvas.SuppressChanges = true;
+            try
+            {
+                foreach (Cell cell in loaded[id])
+                    canvas.chalkUpdate(new Vector2(cell.X, cell.Y), cell.Color);
+            }
+            finally
+            {
+                ChalkCanvas.SuppressChanges = false;
+            }
 
             restored += loaded[id].Count;
         }

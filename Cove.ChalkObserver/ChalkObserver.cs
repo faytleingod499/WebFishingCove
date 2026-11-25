@@ -14,7 +14,7 @@ using Cove.Server.Plugins;
 ///
 /// Picture layout: canvas 0 top left, canvas 1 top right, canvas 2 bottom left, canvas 3 bottom right.
 /// </summary>
-public class ChalkObserver : CovePlugin
+public partial class ChalkObserver : CovePlugin
 {
     private const string FileName = "chalkobserver.txt";
     private const string FolderName = "ChalkObserver";
@@ -80,6 +80,9 @@ public class ChalkObserver : CovePlugin
         public bool SaveImages = true;
         public bool Debug;
         public int MaxSavedImages = DefaultMaxSavedImages;
+        public bool History = true;
+        public int HistoryHours = DefaultHistoryHours;
+        public int HistoryMaxEntries = DefaultHistoryMaxEntries;
         public string WebhookUrl = "";
         public string DiscordMessage = DefaultMessage;
         public byte[] Background = (byte[])DefaultBackground.Clone();
@@ -186,6 +189,7 @@ public class ChalkObserver : CovePlugin
             {
                 Directory.CreateDirectory(folderPath);
                 EnsureFileExists();
+                AppendHistoryHelp();
                 Reload();
             }
             catch (Exception e)
@@ -201,6 +205,9 @@ public class ChalkObserver : CovePlugin
             cancel = new CancellationTokenSource();
             running = true;
         }
+
+        // after the settings are read, it needs historyHours
+        HistoryInit();
     }
 
     public override void onEnd()
@@ -212,11 +219,15 @@ public class ChalkObserver : CovePlugin
             running = false;
             cancel?.Cancel();
         }
+
+        HistoryEnd();
     }
 
     // triggered 12 times a second by the server
     public override void onUpdate()
     {
+        HistoryUpdate();
+
         Settings? dueSettings = null;
         CancellationToken token = default;
 
@@ -692,6 +703,12 @@ public class ChalkObserver : CovePlugin
         next.Debug = ReadBool(values, "debug", false);
         debugOn = next.Debug;
         next.MaxSavedImages = ReadInt(values, "maxSavedImages", DefaultMaxSavedImages, 0, 100000);
+        next.History = ReadBool(values, "history", true);
+        next.HistoryHours = ReadInt(values, "historyHours", DefaultHistoryHours, 1, MaxHistoryHours);
+        next.HistoryMaxEntries = ReadInt(values, "historyMaxEntries", DefaultHistoryMaxEntries, 10000, 5_000_000);
+        historyOn = next.History;
+        historyHours = next.HistoryHours;
+        historyMaxEntries = next.HistoryMaxEntries;
 
         if (values.TryGetValue("discordMessage", out string? message))
             next.DiscordMessage = message.Replace("\\n", "\n");
@@ -882,6 +899,12 @@ public class ChalkObserver : CovePlugin
             "#                    > Copy Webhook URL. KEEP IT PRIVATE, anyone with it can",
             "#                    post in your channel.",
             "#  discordMessage  = the text sent with the picture. \\n makes a line break.",
+            "#  history         = true or false. Log every chalk change (who, where, old and new",
+            "#                    colour) so one player's chalk can be rolled back. Admin commands:",
+            "#                    !chalkhistory [time]   who changed the chalk lately",
+            "#                    !chalkrollback <player> <time|all> [canvas] [check]",
+            "#  historyHours    = how many hours of history to keep (1-168).",
+            "#  historyMaxEntries = most changes kept, the oldest go first.",
             "#",
             "#  You can edit and save this file while the server is running, it is",
             "#  picked up within about 10 seconds.",
@@ -903,6 +926,9 @@ public class ChalkObserver : CovePlugin
             "saveImages = true",
             "debug = false",
             "maxSavedImages = 500",
+            "history = true",
+            "historyHours = 48",
+            "historyMaxEntries = 1000000",
             "",
             "discordWebhook =",
             "discordMessage = The chalk canvases changed.",
