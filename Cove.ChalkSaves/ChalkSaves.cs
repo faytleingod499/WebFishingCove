@@ -90,6 +90,8 @@ public class ChalkSaves : CovePlugin
     private readonly Dictionary<ulong, string> publishedBrowse = new();
     private readonly Dictionary<ulong, string> ownerNames = new(); // Steam ID -> name, read once from a save
     private const int MaxOwnersListed = 120;
+    private const int MaxOwnersChars = 1800; // of the owners list an admin sees in the HUD
+    private const int MaxSaveListChars = 500;   // of one player's list of save names in the lobby data
 
     public ChalkSaves(CoveServer server) : base(server) { }
 
@@ -202,6 +204,31 @@ public class ChalkSaves : CovePlugin
         return ok;
     }
 
+    // what is in the lobby data right now, to see what fills it: "37 keys, 6120 bytes; biggest: wp_ca7656...=2100, ..."
+    private static string LobbyDataReport(CSteamID lobby)
+    {
+        try
+        {
+            int count = SteamMatchmaking.GetLobbyDataCount(lobby);
+            var sizes = new List<(string Key, int Size)>();
+            int total = 0;
+            for (int i = 0; i < count; i++)
+            {
+                if (!SteamMatchmaking.GetLobbyDataByIndex(lobby, i, out string key, 256, out string value, 8192))
+                    continue;
+                int size = System.Text.Encoding.UTF8.GetByteCount(key) + System.Text.Encoding.UTF8.GetByteCount(value);
+                total += size;
+                sizes.Add((key, size));
+            }
+            string biggest = string.Join(", ", sizes.OrderByDescending(e => e.Size).Take(5).Select(e => $"{e.Key}={e.Size}"));
+            return $"{count} keys, {total} bytes; biggest: {biggest}";
+        }
+        catch (Exception ex)
+        {
+            return $"could not read the lobby data: {ex.Message}";
+        }
+    }
+
     private static bool StillThere(CSteamID lobby, string key, string value)
     {
         try
@@ -258,7 +285,17 @@ public class ChalkSaves : CovePlugin
                             .Where(n => TryName(n, out string clean) && clean == n)
                             .OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToList()
                         : new List<string>();
-                    lists[id] = string.Join(",", names);
+                    // cut at a whole name: a few players with many long names must not fill the shared lobby data
+                    var shownNames = new List<string>();
+                    int used = 0;
+                    foreach (string n in names)
+                    {
+                        if (used + n.Length + 1 > MaxSaveListChars)
+                            break;
+                        shownNames.Add(n);
+                        used += n.Length + 1;
+                    }
+                    lists[id] = string.Join(",", shownNames);
 
                     string offerText = "";
                     if (offers.TryGetValue(id, out Offer? offer))
@@ -310,7 +347,7 @@ public class ChalkSaves : CovePlugin
                 if (Environment.TickCount64 - lastWriteFailLogTick > 60_000)
                 {
                     lastWriteFailLogTick = Environment.TickCount64;
-                    Log("Steam did not keep some of the HUD lobby data, trying again soon. The lobby data may be full.");
+                    Log($"Steam did not keep some of the HUD lobby data, trying again soon. The lobby data may be full. Now in the lobby: {LobbyDataReport(lobby)}");
                 }
             }
         }
@@ -819,8 +856,18 @@ public class ChalkSaves : CovePlugin
             entries.Add((id, name, files.Length, last));
         }
 
-        var shown = entries.OrderByDescending(e => e.Last).Take(MaxOwnersListed);
-        return string.Join(";", shown.Select(e => $"{e.Id}~{CleanName(e.Name)}~{e.Count}"));
+        // newest first, and never more than MaxOwnersChars: the whole lobby may hold only about 8 KB, shared by everything
+        var text = new StringBuilder();
+        foreach (var owner in entries.OrderByDescending(x => x.Last).Take(MaxOwnersListed))
+        {
+            string entry = $"{owner.Id}~{CleanName(owner.Name)}~{owner.Count}";
+            if (text.Length + entry.Length + 1 > MaxOwnersChars)
+                break;
+            if (text.Length > 0)
+                text.Append(';');
+            text.Append(entry);
+        }
+        return text.ToString();
     }
 
     // the name in a save file, which is near its start, so a big save is never read whole

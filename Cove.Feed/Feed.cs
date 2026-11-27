@@ -672,10 +672,35 @@ public class Feed : CovePlugin
             if (now - lastWriteFailLogTick > 60_000)
             {
                 lastWriteFailLogTick = now;
-                Log($"Steam did not keep the lobby data '{key}' ({value.Length} characters), trying again soon. The lobby data may be full.");
+                Log($"Steam did not keep the lobby data '{key}' ({value.Length} characters), trying again soon. The lobby data may be full. Now in the lobby: {LobbyDataReport(lobby)}");
             }
         }
         return ok;
+    }
+
+    // what is in the lobby data right now, to see what fills it: "37 keys, 6120 bytes; biggest: wp_ca7656...=2100, ..."
+    private static string LobbyDataReport(CSteamID lobby)
+    {
+        try
+        {
+            int count = SteamMatchmaking.GetLobbyDataCount(lobby);
+            var sizes = new List<(string Key, int Size)>();
+            int total = 0;
+            for (int i = 0; i < count; i++)
+            {
+                if (!SteamMatchmaking.GetLobbyDataByIndex(lobby, i, out string key, 256, out string value, 8192))
+                    continue;
+                int size = System.Text.Encoding.UTF8.GetByteCount(key) + System.Text.Encoding.UTF8.GetByteCount(value);
+                total += size;
+                sizes.Add((key, size));
+            }
+            string biggest = string.Join(", ", sizes.OrderByDescending(e => e.Size).Take(5).Select(e => $"{e.Key}={e.Size}"));
+            return $"{count} keys, {total} bytes; biggest: {biggest}";
+        }
+        catch (Exception ex)
+        {
+            return $"could not read the lobby data: {ex.Message}";
+        }
     }
 
     // true when the value is still what we wrote (Steam can lose data)
